@@ -43,6 +43,7 @@ In scope for the first baseline:
 - Python experiment configuration loaded into dataclass config objects.
 - A minimal but usable training framework.
 - Router load metrics and checkpoints.
+- Resume support that restores model, optimizer, and scheduler state.
 - Documentation for setup, training, and experiment comparison.
 
 Out of scope for the first baseline:
@@ -118,9 +119,10 @@ The main dataclass groups are:
 - `ModelConfig`: Qwen3 MoE model name, local checkpoint path, or tiny model dimensions.
 - `DataConfig`: training text files, tokenizer, block size, and packing behavior.
 - `TrainingConfig`: batch size, learning rate, training steps, checkpoint path, dtype,
-  gradient accumulation, and logging interval.
+  gradient accumulation, linear warmup steps, and logging interval.
 - `AlfConfig`: whether auxiliary-loss-free routing is enabled, bias initialization,
-  bias update rate, and whether to disable the original router auxiliary loss.
+  bias update rate, bias update policy, and whether to disable the original router
+  auxiliary loss.
 
 The CLI should support dotted overrides for short runs and simple sweeps:
 
@@ -145,6 +147,9 @@ The first command trains the auxiliary-loss-free baseline. The second command tr
 the traditional auxiliary-loss comparison baseline. The third command inspects expert
 load and router bias statistics from a checkpoint.
 
+Auxiliary-loss baseline checkpoints also track expert load metrics, but they do not
+include ALF bias statistics because no ALF router is installed.
+
 ## Evaluation Metrics
 
 The first evaluation should compare:
@@ -154,6 +159,7 @@ The first evaluation should compare:
 - Expert load variance.
 - Maximum expert load divided by minimum expert load.
 - Router bias distribution.
+- Bias update policy behavior.
 - Stability of training across short smoke-test runs.
 
 These metrics are enough to verify whether the training framework and routing method

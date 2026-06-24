@@ -1,0 +1,21 @@
+# Work Log
+
+## 2026-06-25
+
+Implemented the initial ALF Qwen3 MoE project across Sprint 0 through Sprint 4.
+
+- Added Python experiment configs with typed dataclass loading and dotted CLI overrides.
+- Added Qwen3 MoE auxiliary-loss-free router patching with expert bias, load tracking, and configurable update policies.
+- Added tiny Qwen3 MoE training framework, checkpoint save/resume, warmup scheduler, and router inspection CLI.
+- Added comparable expert-load metrics for both ALF and auxiliary-loss baselines.
+- Added README and project docs for setup, experiment configs, router variants, and report templates.
+- Added tests for config loading, data packing, router behavior, model patching, metrics, training resume, and checkpoint inspection.
+
+Validation:
+
+- `uv sync`
+- `uv run pytest` passed with 16 tests.
+- `uv run alf-train experiments/qwen3_moe_tiny_alf.py --training.max_steps 1 --training.output_dir /tmp/alf-final-smoke --training.save_every 1`
+- `uv run alf-train experiments/qwen3_moe_tiny_aux_loss.py --training.max_steps 1 --training.output_dir /tmp/alf-aux-final --training.save_every 1`
+- `uv run alf-inspect-router --checkpoint /tmp/alf-final-smoke/latest`
+- `uv run alf-inspect-router --checkpoint /tmp/alf-aux-final/latest`

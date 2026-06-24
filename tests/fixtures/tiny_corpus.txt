@@ -1,0 +1,4 @@
+Auxiliary loss free routing balances mixture of experts without adding a router loss.
+Qwen3 MoE experiments need a small repeatable corpus for smoke tests.
+The baseline trains a tiny causal language model and records expert load metrics.
+Research code should be simple, typed, reproducible, and easy to extend.
