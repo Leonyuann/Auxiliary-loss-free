@@ -9,3 +9,7 @@ wheels/
 # Virtual environments
 .venv
 AGENTS.md
+
+# Experiment tracking outputs
+wandb/
+outputs/

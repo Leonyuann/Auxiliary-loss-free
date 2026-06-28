@@ -1,15 +1,18 @@
 """Tiny Qwen3 MoE traditional auxiliary-loss baseline experiment."""
 
-from alf.config import AlfConfig, DataConfig, ExperimentConfig, ModelConfig, TrainingConfig
+from alf.config import AlfConfig, DataConfig, EvalConfig, ExperimentConfig, ModelConfig, TrainingConfig, WandbConfig
 
 config = ExperimentConfig(
     name="qwen3_moe_tiny_aux_loss",
     model=ModelConfig(use_tiny_config=True),
     data=DataConfig(
         train_files=["tests/fixtures/tiny_corpus.txt"],
+        validation_files=["tests/fixtures/tiny_corpus.txt"],
         block_size=32,
         max_train_samples=8,
+        max_validation_samples=4,
     ),
+    eval=EvalConfig(eval_every=5, eval_batch_size=2),
     training=TrainingConfig(
         output_dir="outputs/qwen3_moe_tiny_aux_loss",
         max_steps=5,
@@ -22,4 +25,5 @@ config = ExperimentConfig(
         enabled=False,
         disable_router_aux_loss=False,
     ),
+    wandb=WandbConfig(enabled=True, tags=["aux-loss", "qwen3-moe", "tiny"]),
 )

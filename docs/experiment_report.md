@@ -22,7 +22,11 @@
 ## Results
 
 - Final language modeling loss:
+- Final auxiliary loss:
 - Tokens per second:
+- Validation PPL:
+- Validation MaxVio_global:
+- Final MaxVio_batch rolling-100:
 - Expert load variance:
 - Max/min expert load ratio:
 - Bias min/max:

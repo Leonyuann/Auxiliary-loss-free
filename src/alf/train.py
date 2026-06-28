@@ -6,6 +6,7 @@ import json
 import random
 import shutil
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -15,8 +16,20 @@ from tqdm.auto import tqdm
 
 from alf.config import asdict, load_experiment_config, parse_config_args
 from alf.data import build_packed_text_dataset, causal_lm_collate
-from alf.metrics import append_jsonl, collect_router_metrics
+from alf.eval import evaluate_model
+from alf.metrics import (
+    activation_matrix_from_counts,
+    activation_rows_from_counts,
+    add_layer_counts,
+    append_jsonl,
+    collect_expert_load_counts,
+    collect_router_metrics,
+    loss_breakdown,
+    mean_maxvio,
+    serialize_activation_matrix,
+)
 from alf.modeling import build_model_and_tokenizer
+from alf.wandb_logging import ExperimentLogger
 
 
 def train(config_path: str | Path, overrides: list[str] | None = None) -> Path:
@@ -35,7 +48,9 @@ def train(config_path: str | Path, overrides: list[str] | None = None) -> Path:
 
     output_dir = Path(config.training.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "config.json").write_text(json.dumps(asdict(config), indent=2), encoding="utf-8")
+    config_dict = asdict(config)
+    (output_dir / "config.json").write_text(json.dumps(config_dict, indent=2), encoding="utf-8")
+    logger = ExperimentLogger(config.wandb, experiment_name=config.name, config=config_dict)
 
     device = _resolve_device(config.training.device)
     model, tokenizer = build_model_and_tokenizer(config.model, config.alf)
@@ -71,43 +86,130 @@ def train(config_path: str | Path, overrides: list[str] | None = None) -> Path:
     progress = tqdm(total=config.training.max_steps, initial=start_step, desc=config.name)
     data_iter = _cycle(loader)
     last_checkpoint = output_dir / "latest"
+    maxvio_window: deque[float] = deque(maxlen=100)
+    best_eval_ppl: float | None = None
+    best_eval_maxvio: float | None = None
 
-    while step < config.training.max_steps:
-        optimizer.zero_grad(set_to_none=True)
-        step_start = time.perf_counter()
-        total_loss = 0.0
-        tokens = 0
+    try:
+        while step < config.training.max_steps:
+            optimizer.zero_grad(set_to_none=True)
+            step_start = time.perf_counter()
+            loss_totals = {"loss": 0.0, "lm_loss": 0.0, "aux_loss": 0.0, "aux_loss_scaled": 0.0}
+            tokens = 0
+            step_layer_counts: dict[str, torch.Tensor] = {}
 
-        for _ in range(config.training.gradient_accumulation_steps):
-            batch = next(data_iter)
-            batch = {key: value.to(device) for key, value in batch.items()}
-            outputs = model(**batch)
-            loss = outputs.loss / config.training.gradient_accumulation_steps
-            loss.backward()
-            total_loss += loss.detach().float().item()
-            tokens += int(batch["input_ids"].numel())
+            for _ in range(config.training.gradient_accumulation_steps):
+                batch = next(data_iter)
+                batch = {key: value.to(device) for key, value in batch.items()}
+                outputs = model(**batch)
+                breakdown = loss_breakdown(outputs, model)
+                loss = outputs.loss / config.training.gradient_accumulation_steps
+                loss.backward()
+                for key in loss_totals:
+                    loss_totals[key] += breakdown[key] / config.training.gradient_accumulation_steps
+                tokens += int(batch["input_ids"].numel())
+                add_layer_counts(step_layer_counts, collect_expert_load_counts(model))
 
-        optimizer.step()
-        scheduler.step()
-        step += 1
-        progress.update(1)
+            grad_norm = _gradient_norm(model)
+            optimizer.step()
+            scheduler.step()
+            step += 1
+            progress.update(1)
 
-        elapsed = max(time.perf_counter() - step_start, 1e-9)
-        if step % config.training.log_every == 0 or step == config.training.max_steps:
+            elapsed = max(time.perf_counter() - step_start, 1e-9)
+            maxvio_batch = mean_maxvio(step_layer_counts)
+            activation_matrix, _ = activation_matrix_from_counts(step_layer_counts)
+            activation_matrix_json = serialize_activation_matrix(activation_matrix, _)
+            activation_rows = activation_rows_from_counts(step_layer_counts, step=step, split="train")
+
             record: dict[str, Any] = {
                 "step": step,
-                "loss": total_loss,
-                "learning_rate": float(scheduler.get_last_lr()[0]),
-                "tokens_per_second": tokens / elapsed,
+                "train": {
+                    "loss": loss_totals["loss"],
+                    "lm_loss": loss_totals["lm_loss"],
+                    "aux_loss": loss_totals["aux_loss"],
+                    "aux_loss_scaled": loss_totals["aux_loss_scaled"],
+                    "learning_rate": float(scheduler.get_last_lr()[0]),
+                    "grad_norm": grad_norm,
+                    "tokens_per_second": tokens / elapsed,
+                    "maxvio_batch": maxvio_batch,
+                },
                 "router": collect_router_metrics(model),
+                "expert_activation": {
+                    "train": {
+                        "matrix": activation_matrix_json,
+                        "rows": activation_rows,
+                    }
+                },
             }
-            append_jsonl(metrics_path, record)
-            progress.set_postfix(loss=f"{total_loss:.4f}")
 
-        if step % config.training.save_every == 0 or step == config.training.max_steps:
-            last_checkpoint = _save_checkpoint(output_dir, "latest", model, optimizer, scheduler, step, asdict(config))
+            if step % config.training.log_every == 0 or step == config.training.max_steps:
+                maxvio_window.append(maxvio_batch)
+                record["train"]["maxvio_batch_rolling_100"] = float(sum(maxvio_window) / len(maxvio_window))
+                append_jsonl(metrics_path, record)
+                logger.log(record, step=step)
+                logger.log_expert_activation_heatmap("train/expert_activation", activation_matrix, step=step)
+                logger.log_expert_activation_table("train/expert_activation", activation_rows, step=step)
+                progress.set_postfix(loss=f"{loss_totals['loss']:.4f}")
 
-    progress.close()
+            if _should_evaluate(step, config.eval.eval_every, config.training.max_steps):
+                eval_record = evaluate_model(model, tokenizer, config, device)
+                eval_scalars = {
+                    key: value
+                    for key, value in eval_record.items()
+                    if not key.endswith("_matrix")
+                    and not key.endswith("_rows")
+                    and not key.endswith("_layers")
+                    and not key.endswith("_matrix_json")
+                }
+                eval_json_record = {
+                    "step": step,
+                    **eval_scalars,
+                    "expert_activation": {
+                        "eval": {
+                            "matrix": eval_record["eval/expert_activation_matrix_json"],
+                            "rows": eval_record["eval/expert_activation_rows"],
+                        }
+                    },
+                }
+                append_jsonl(metrics_path, eval_json_record)
+                logger.log(eval_scalars, step=step)
+                logger.log_expert_activation_heatmap(
+                    "eval/expert_activation",
+                    eval_record["eval/expert_activation_matrix"],
+                    step=step,
+                )
+                logger.log_expert_activation_table(
+                    "eval/expert_activation",
+                    eval_record["eval/expert_activation_rows"],
+                    step=step,
+                )
+                eval_ppl = float(eval_record["eval/ppl"])
+                eval_maxvio = float(eval_record["eval/maxvio_global"])
+                best_eval_ppl = eval_ppl if best_eval_ppl is None else min(best_eval_ppl, eval_ppl)
+                best_eval_maxvio = eval_maxvio if best_eval_maxvio is None else min(best_eval_maxvio, eval_maxvio)
+                logger.update_summary(
+                    {
+                        "best/eval_ppl": best_eval_ppl,
+                        "best/eval_maxvio_global": best_eval_maxvio,
+                        "final/eval_ppl": eval_ppl,
+                        "final/eval_maxvio_global": eval_maxvio,
+                    }
+                )
+
+            if step % config.training.save_every == 0 or step == config.training.max_steps:
+                last_checkpoint = _save_checkpoint(output_dir, "latest", model, optimizer, scheduler, step, asdict(config))
+                logger.log_artifact(
+                    last_checkpoint,
+                    name=f"{config.name}-latest",
+                    artifact_type="checkpoint",
+                    aliases=["latest", f"step-{step}"],
+                    metadata={"step": step},
+                )
+
+    finally:
+        progress.close()
+        logger.finish()
     return last_checkpoint
 
 
@@ -144,6 +246,42 @@ def _set_seed(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
+def _gradient_norm(model: torch.nn.Module) -> float:
+    """Compute global L2 gradient norm without modifying gradients.
+
+    Args:
+        model: Model whose gradients should be measured.
+
+    Returns:
+        Gradient norm.
+    """
+
+    total = 0.0
+    for parameter in model.parameters():
+        if parameter.grad is None:
+            continue
+        param_norm = parameter.grad.detach().float().norm(2).item()
+        total += param_norm * param_norm
+    return float(total**0.5)
+
+
+def _should_evaluate(step: int, eval_every: int, max_steps: int) -> bool:
+    """Return whether validation should run at a step.
+
+    Args:
+        step: Current training step.
+        eval_every: Evaluation interval. Zero disables periodic eval.
+        max_steps: Final training step.
+
+    Returns:
+        Whether to evaluate.
+    """
+
+    if eval_every <= 0:
+        return step == max_steps
+    return step % eval_every == 0 or step == max_steps
 
 
 def _cycle(loader: DataLoader) -> Any:

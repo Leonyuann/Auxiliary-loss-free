@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -77,6 +78,191 @@ def summarize_expert_load(
         "min_load": int(min_load),
         "max_load": int(max_load),
         "max_min_load_ratio": None if max_min_ratio is None else float(max_min_ratio),
+    }
+
+
+def compute_maxvio(counts: Tensor) -> float:
+    """Compute maximal violation for one MoE layer.
+
+    Args:
+        counts: Per-expert activation counts for one layer.
+
+    Returns:
+        MaxVio value. Returns zero when no expert assignments exist.
+    """
+
+    values = counts.detach().to(dtype=torch.float32, device="cpu")
+    total = float(values.sum().item())
+    if values.numel() == 0 or total == 0.0:
+        return 0.0
+    expected = total / float(values.numel())
+    return float((values.max().item() - expected) / expected)
+
+
+def mean_maxvio(layer_counts: dict[str, Tensor]) -> float:
+    """Average MaxVio across MoE layers.
+
+    Args:
+        layer_counts: Mapping from layer/router names to per-expert counts.
+
+    Returns:
+        Mean MaxVio across layers.
+    """
+
+    if not layer_counts:
+        return 0.0
+    return float(sum(compute_maxvio(counts) for counts in layer_counts.values()) / len(layer_counts))
+
+
+def collect_expert_load_counts(model: nn.Module) -> dict[str, Tensor]:
+    """Collect current per-layer expert load counts from tracked routers.
+
+    Args:
+        model: Model containing tracked Qwen3 MoE routers.
+
+    Returns:
+        Mapping from router names to count tensors.
+    """
+
+    layer_counts: dict[str, Tensor] = {}
+    for module_name, module in model.named_modules():
+        if hasattr(module, "last_expert_load"):
+            layer_counts[module_name] = getattr(module, "last_expert_load").detach().cpu().clone()
+    return layer_counts
+
+
+def add_layer_counts(destination: dict[str, Tensor], source: dict[str, Tensor]) -> None:
+    """Accumulate expert load counts by layer name.
+
+    Args:
+        destination: Mutable accumulated counts.
+        source: Counts to add.
+    """
+
+    for layer_name, counts in source.items():
+        if layer_name not in destination:
+            destination[layer_name] = counts.detach().cpu().clone()
+        else:
+            destination[layer_name] = destination[layer_name] + counts.detach().cpu()
+
+
+def activation_matrix_from_counts(layer_counts: dict[str, Tensor]) -> tuple[Tensor, list[str]]:
+    """Convert per-layer counts into a layer-by-expert fraction matrix.
+
+    Args:
+        layer_counts: Mapping from layer/router names to per-expert counts.
+
+    Returns:
+        A tuple of activation fraction matrix and row layer names.
+    """
+
+    layer_names = sorted(layer_counts, key=_layer_sort_key)
+    rows: list[Tensor] = []
+    max_experts = max((int(layer_counts[name].numel()) for name in layer_names), default=0)
+    for layer_name in layer_names:
+        counts = layer_counts[layer_name].detach().to(dtype=torch.float32, device="cpu")
+        total = counts.sum().clamp_min(1.0)
+        fractions = counts / total
+        if counts.numel() < max_experts:
+            fractions = torch.nn.functional.pad(fractions, (0, max_experts - counts.numel()))
+        rows.append(fractions)
+    if not rows:
+        return torch.zeros((0, 0), dtype=torch.float32), []
+    return torch.stack(rows), layer_names
+
+
+def activation_rows_from_counts(
+    layer_counts: dict[str, Tensor],
+    *,
+    step: int | None,
+    split: str,
+) -> list[dict[str, Any]]:
+    """Create table rows for expert activation counts and fractions.
+
+    Args:
+        layer_counts: Mapping from layer/router names to per-expert counts.
+        step: Optional training step.
+        split: Metric split name.
+
+    Returns:
+        JSON/W&B table rows.
+    """
+
+    rows: list[dict[str, Any]] = []
+    for layer_index, layer_name in enumerate(sorted(layer_counts, key=_layer_sort_key)):
+        counts = layer_counts[layer_name].detach().to(dtype=torch.float32, device="cpu")
+        total = float(counts.sum().item())
+        for expert_index, count in enumerate(counts.tolist()):
+            rows.append(
+                {
+                    "step": step,
+                    "split": split,
+                    "layer_index": layer_index,
+                    "layer": layer_name,
+                    "expert": expert_index,
+                    "count": int(count),
+                    "fraction": 0.0 if total == 0.0 else float(count / total),
+                }
+            )
+    return rows
+
+
+def serialize_activation_matrix(matrix: Tensor, layer_names: list[str]) -> dict[str, Any]:
+    """Convert an activation matrix into JSON-serializable content.
+
+    Args:
+        matrix: Layer-by-expert activation fraction matrix.
+        layer_names: Matrix row labels.
+
+    Returns:
+        Serializable activation matrix dictionary.
+    """
+
+    return {
+        "layers": layer_names,
+        "values": matrix.detach().cpu().tolist(),
+    }
+
+
+def _layer_sort_key(layer_name: str) -> tuple[Any, ...]:
+    """Sort router layer names by numeric model layer when present.
+
+    Args:
+        layer_name: Router module name.
+
+    Returns:
+        Stable sort key.
+    """
+
+    match = re.search(r"(?:^|\.)layers\.(\d+)(?:\.|$)", layer_name)
+    if match is None:
+        return (1, layer_name)
+    return (0, int(match.group(1)), layer_name)
+
+
+def loss_breakdown(outputs: Any, model: nn.Module) -> dict[str, float]:
+    """Split model outputs into total, LM, and auxiliary loss values.
+
+    Args:
+        outputs: Hugging Face model output with ``loss`` and optional ``aux_loss``.
+        model: Model used to resolve the router auxiliary-loss coefficient.
+
+    Returns:
+        Loss dictionary with stable float values.
+    """
+
+    total_loss = float(outputs.loss.detach().float().item())
+    aux_loss_value = getattr(outputs, "aux_loss", None)
+    aux_loss = 0.0 if aux_loss_value is None else float(aux_loss_value.detach().float().item())
+    aux_coef = float(
+        getattr(model, "router_aux_loss_coef", getattr(getattr(model, "config", object()), "router_aux_loss_coef", 0.0))
+    )
+    aux_loss_scaled = aux_coef * aux_loss
+    return {
+        "loss": total_loss,
+        "lm_loss": total_loss - aux_loss_scaled,
+        "aux_loss": aux_loss,
+        "aux_loss_scaled": aux_loss_scaled,
     }
 
 
@@ -244,10 +430,18 @@ def append_jsonl(path: str | Path, record: dict[str, Any]) -> None:
 
 __all__ = [
     "append_jsonl",
+    "activation_matrix_from_counts",
+    "activation_rows_from_counts",
+    "add_layer_counts",
     "collect_auxiliary_loss_free_router_metrics",
+    "collect_expert_load_counts",
     "collect_router_metrics",
+    "compute_maxvio",
     "compute_expert_load_counts",
     "load_balance_metrics",
+    "loss_breakdown",
+    "mean_maxvio",
+    "serialize_activation_matrix",
     "summarize_auxiliary_loss_free_router",
     "summarize_expert_bias",
     "summarize_expert_load",

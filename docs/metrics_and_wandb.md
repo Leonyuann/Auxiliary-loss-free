@@ -1,0 +1,68 @@
+# Metrics and W&B Logging
+
+## Paper Metrics
+
+The auxiliary-loss-free paper reports two primary observability targets:
+
+- Table 2: validation perplexity and MaxVio_global.
+- Figure 3: MaxVio_batch over training steps, smoothed by 100 neighboring steps.
+
+This project records both metrics during training.
+
+## MaxVio
+
+For one MoE layer, expected load is:
+
+```text
+expected_load = total_expert_assignments / num_experts
+```
+
+Layer MaxVio is:
+
+```text
+maxvio = (max_expert_load - expected_load) / expected_load
+```
+
+The model-level MaxVio is the average across MoE layers.
+
+## W&B Keys
+
+Common training metrics:
+
+- `train/loss`: total backward loss.
+- `train/lm_loss`: language-modeling loss with scaled auxiliary loss removed.
+- `train/aux_loss`: raw router auxiliary loss when available.
+- `train/aux_loss_scaled`: auxiliary loss multiplied by the model auxiliary-loss coefficient.
+- `train/learning_rate`: scheduler learning rate.
+- `train/grad_norm`: global gradient norm.
+- `train/tokens_per_second`: training throughput.
+
+Paper and routing metrics:
+
+- `train/maxvio_batch`: current batch load-balance violation.
+- `train/maxvio_batch_rolling_100`: rolling mean over the latest 100 JSONL/W&B logged batches.
+- `eval/loss`: validation language-modeling loss.
+- `eval/ppl`: validation perplexity.
+- `eval/maxvio_global`: validation-set global load-balance violation.
+- `train/expert_activation/heatmap`: layer-by-expert training activation heatmap.
+- `eval/expert_activation/heatmap`: layer-by-expert validation activation heatmap.
+
+## Local JSONL
+
+Every run also writes `metrics.jsonl` under the experiment output directory. This
+keeps scalar metrics, MaxVio values, expert activation matrices, and expert activation
+table rows available even when W&B is disabled.
+
+## Running
+
+Online W&B:
+
+```bash
+WANDB_ENTITY=my-team WANDB_PROJECT=alf uv run alf-train experiments/qwen3_moe_tiny_alf.py
+```
+
+Disabled W&B:
+
+```bash
+uv run alf-train experiments/qwen3_moe_tiny_alf.py --wandb.enabled false
+```

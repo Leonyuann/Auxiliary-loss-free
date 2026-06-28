@@ -55,14 +55,18 @@ class DataConfig:
 
     Attributes:
         train_files: Text files used for causal language model training.
+        validation_files: Text files used for validation metrics.
         block_size: Fixed token block size after packing.
         max_train_samples: Optional maximum number of packed blocks to keep.
+        max_validation_samples: Optional maximum number of validation blocks.
         tokenizer_name_or_path: Optional tokenizer override.
     """
 
     train_files: list[str] = field(default_factory=lambda: ["tests/fixtures/tiny_corpus.txt"])
+    validation_files: list[str] = field(default_factory=lambda: ["tests/fixtures/tiny_corpus.txt"])
     block_size: int = 64
     max_train_samples: int | None = None
+    max_validation_samples: int | None = None
     tokenizer_name_or_path: str | None = None
 
 
@@ -126,6 +130,44 @@ class AlfConfig:
 
 
 @dataclass
+class EvalConfig:
+    """Validation evaluation options.
+
+    Attributes:
+        eval_every: Step interval for validation. Use zero to disable periodic eval.
+        eval_batch_size: Validation dataloader batch size.
+        max_eval_samples: Optional maximum validation examples to evaluate.
+    """
+
+    eval_every: int = 5
+    eval_batch_size: int = 2
+    max_eval_samples: int | None = None
+
+
+@dataclass
+class WandbConfig:
+    """Weights & Biases logging options.
+
+    Attributes:
+        enabled: Whether W&B logging is enabled.
+        entity: Optional W&B entity. Defaults to ``WANDB_ENTITY``.
+        project: Optional W&B project. Defaults to ``WANDB_PROJECT``.
+        mode: W&B mode, such as ``online``, ``offline``, or ``disabled``.
+        group: Optional run group. Defaults to ``WANDB_RUN_GROUP``.
+        tags: Optional run tags. Defaults to comma-separated ``WANDB_TAGS``.
+        log_checkpoints: Whether checkpoint artifacts should be uploaded.
+    """
+
+    enabled: bool = True
+    entity: str | None = None
+    project: str | None = None
+    mode: str = "online"
+    group: str | None = None
+    tags: list[str] = field(default_factory=list)
+    log_checkpoints: bool = False
+
+
+@dataclass
 class ExperimentConfig:
     """Complete experiment configuration.
 
@@ -135,6 +177,8 @@ class ExperimentConfig:
         data: Data loading options.
         training: Training loop options.
         alf: Auxiliary-loss-free routing options.
+        eval: Validation evaluation options.
+        wandb: W&B logging options.
     """
 
     name: str
@@ -142,6 +186,8 @@ class ExperimentConfig:
     data: DataConfig = field(default_factory=DataConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
     alf: AlfConfig = field(default_factory=AlfConfig)
+    eval: EvalConfig = field(default_factory=EvalConfig)
+    wandb: WandbConfig = field(default_factory=WandbConfig)
 
 
 def parse_config_args(argv: Sequence[str] | None = None) -> tuple[Path, list[str]]:

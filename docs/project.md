@@ -44,6 +44,8 @@ In scope for the first baseline:
 - A minimal but usable training framework.
 - Router load metrics and checkpoints.
 - Resume support that restores model, optimizer, and scheduler state.
+- W&B experiment tracking for loss, learning rate, auxiliary loss, PPL, MaxVio, and
+  expert activation heatmaps.
 - Documentation for setup, training, and experiment comparison.
 
 Out of scope for the first baseline:
@@ -123,6 +125,9 @@ The main dataclass groups are:
 - `AlfConfig`: whether auxiliary-loss-free routing is enabled, bias initialization,
   bias update rate, bias update policy, and whether to disable the original router
   auxiliary loss.
+- `EvalConfig`: validation interval, validation batch size, and sample cap.
+- `WandbConfig`: W&B online/offline/disabled mode, entity/project, group, tags, and
+  checkpoint artifact logging.
 
 The CLI should support dotted overrides for short runs and simple sweeps:
 
@@ -150,16 +155,23 @@ load and router bias statistics from a checkpoint.
 Auxiliary-loss baseline checkpoints also track expert load metrics, but they do not
 include ALF bias statistics because no ALF router is installed.
 
+Use `--wandb.enabled false` for local smoke tests. Real experiment runs default to
+W&B online mode and expect `WANDB_ENTITY` and `WANDB_PROJECT`.
+
 ## Evaluation Metrics
 
 The first evaluation should compare:
 
 - Language modeling loss.
+- Auxiliary loss and scaled auxiliary-loss contribution.
+- Learning rate and gradient norm.
 - Tokens per second.
 - Expert load variance.
 - Maximum expert load divided by minimum expert load.
 - Router bias distribution.
 - Bias update policy behavior.
+- MaxVio_batch, rolling-100 MaxVio_batch, and validation MaxVio_global.
+- Expert activation heatmaps over layer and expert dimensions.
 - Stability of training across short smoke-test runs.
 
 These metrics are enough to verify whether the training framework and routing method

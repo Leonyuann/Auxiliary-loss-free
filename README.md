@@ -37,7 +37,7 @@ uv run alf-train experiments/qwen3_moe_tiny_aux_loss.py
 Short smoke run with CLI overrides:
 
 ```bash
-uv run alf-train experiments/qwen3_moe_tiny_alf.py --training.max_steps 1
+uv run alf-train experiments/qwen3_moe_tiny_alf.py --training.max_steps 1 --wandb.enabled false
 ```
 
 Inspect router load and bias metrics:
@@ -45,6 +45,29 @@ Inspect router load and bias metrics:
 ```bash
 uv run alf-inspect-router --checkpoint outputs/qwen3_moe_tiny_alf/latest
 ```
+
+## W&B Observability
+
+Training runs log both local JSONL metrics and W&B metrics. By default, W&B is enabled
+in online mode and reads `WANDB_ENTITY` and `WANDB_PROJECT` from the environment:
+
+```bash
+WANDB_ENTITY=my-team WANDB_PROJECT=alf uv run alf-train experiments/qwen3_moe_tiny_alf.py
+```
+
+Disable W&B for local smoke tests:
+
+```bash
+uv run alf-train experiments/qwen3_moe_tiny_alf.py --wandb.enabled false
+```
+
+Core W&B metric keys:
+
+- `train/loss`, `train/lm_loss`, `train/aux_loss`, `train/aux_loss_scaled`
+- `train/learning_rate`, `train/grad_norm`, `train/tokens_per_second`
+- `train/maxvio_batch`, `train/maxvio_batch_rolling_100`
+- `eval/loss`, `eval/ppl`, `eval/maxvio_global`
+- `train/expert_activation/heatmap`, `eval/expert_activation/heatmap`
 
 Resume from a checkpoint:
 

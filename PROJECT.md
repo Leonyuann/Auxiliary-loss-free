@@ -124,6 +124,33 @@ Acceptance criteria:
 
 ## Current Default Recommendation
 
-All planned initial sprints are implemented. The next recommended planning step is
-to define the first real research experiment: dataset choice, compute budget, model
-scale, and which ALF policy variants to compare beyond the tiny smoke baseline.
+## Sprint 5: Experiment Observability
+
+Status: complete.
+
+Passes: true.
+
+Goal: record the metrics needed to observe Table 2, Figure 3, and expert activation
+behavior in W&B.
+
+Deliverables:
+
+- Add W&B config and logging helpers.
+- Add validation PPL and MaxVio_global evaluation.
+- Add MaxVio_batch and rolling-100 MaxVio logging.
+- Add expert activation heatmaps and tables.
+- Log regular training metrics including learning rate, loss, LM loss, auxiliary loss,
+  gradient norm, and throughput.
+
+Acceptance criteria:
+
+- `uv run pytest` passes.
+- `uv run alf-train ... --wandb.enabled false` records JSONL observability metrics.
+- W&B disabled mode does not import or call W&B.
+- W&B enabled mode logs stable scalar, table, heatmap, and artifact keys.
+
+## Current Default Recommendation
+
+All planned observability infrastructure is implemented. The next recommended planning
+step is to define the first real research experiment: dataset choice, compute budget,
+model scale, and which ALF policy variants to compare beyond the tiny smoke baseline.

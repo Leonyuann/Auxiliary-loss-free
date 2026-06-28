@@ -1,6 +1,7 @@
 """Integration tests for training checkpoint and inspection flows."""
 
 from pathlib import Path
+import json
 import shutil
 
 import torch
@@ -23,6 +24,8 @@ def test_train_resume_restores_model_state(tmp_path: Path) -> None:
             str(output_dir),
             "--training.save_every",
             "1",
+            "--wandb.enabled",
+            "false",
         ],
     )
     saved_state = load_file(checkpoint / "model.safetensors")
@@ -38,6 +41,8 @@ def test_train_resume_restores_model_state(tmp_path: Path) -> None:
             str(output_dir),
             "--training.resume_from",
             str(checkpoint),
+            "--wandb.enabled",
+            "false",
         ],
     )
     resumed_state = load_file(checkpoint / "model.safetensors")
@@ -58,6 +63,8 @@ def test_aux_loss_baseline_records_router_load_metrics(tmp_path: Path) -> None:
             str(output_dir),
             "--training.save_every",
             "1",
+            "--wandb.enabled",
+            "false",
         ],
     )
 
@@ -81,6 +88,8 @@ def test_checkpoint_inspection_is_self_contained_after_copy(tmp_path: Path) -> N
             str(output_dir),
             "--training.save_every",
             "1",
+            "--wandb.enabled",
+            "false",
         ],
     )
     copied_checkpoint = tmp_path / "copied-latest"
@@ -91,3 +100,91 @@ def test_checkpoint_inspection_is_self_contained_after_copy(tmp_path: Path) -> N
     assert metrics["num_routers"] == 2
     assert "aggregate_bias" in metrics
     assert metrics["aggregate_load"]["total_assignments"] > 0
+
+
+def test_training_metrics_include_wandb_observability_keys(tmp_path: Path) -> None:
+    """Training JSONL should contain the metrics mirrored to W&B."""
+
+    output_dir = tmp_path / "observability"
+    train(
+        "experiments/qwen3_moe_tiny_aux_loss.py",
+        [
+            "--training.max_steps",
+            "1",
+            "--training.output_dir",
+            str(output_dir),
+            "--training.save_every",
+            "1",
+            "--eval.eval_every",
+            "1",
+            "--wandb.enabled",
+            "false",
+        ],
+    )
+
+    records = [
+        json.loads(line)
+        for line in (output_dir / "metrics.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+
+    train_record = next(record for record in records if "train" in record)
+    eval_record = next(record for record in records if "eval/ppl" in record)
+    assert set(train_record["train"]) >= {
+        "loss",
+        "lm_loss",
+        "aux_loss",
+        "aux_loss_scaled",
+        "learning_rate",
+        "grad_norm",
+        "tokens_per_second",
+        "maxvio_batch",
+        "maxvio_batch_rolling_100",
+    }
+    assert eval_record["eval/ppl"] > 0.0
+    assert eval_record["eval/maxvio_global"] >= 0.0
+    assert train_record["expert_activation"]["train"]["matrix"]["layers"]
+    assert train_record["expert_activation"]["train"]["rows"]
+    assert eval_record["expert_activation"]["eval"]["matrix"]["layers"]
+    assert eval_record["expert_activation"]["eval"]["rows"]
+
+
+def test_validation_files_are_used_for_eval_metrics(tmp_path: Path) -> None:
+    """Validation should use explicit validation files and validation sample limits."""
+
+    train_file = tmp_path / "train.txt"
+    val_file = tmp_path / "validation.txt"
+    train_file.write_text("train token " * 200, encoding="utf-8")
+    val_file.write_text("validation token " * 40, encoding="utf-8")
+    output_dir = tmp_path / "validation-flow"
+
+    train(
+        "experiments/qwen3_moe_tiny_alf.py",
+        [
+            "--data.train_files",
+            str(train_file),
+            "--data.validation_files",
+            str(val_file),
+            "--data.max_train_samples",
+            "2",
+            "--data.max_validation_samples",
+            "3",
+            "--eval.max_eval_samples",
+            "1",
+            "--training.max_steps",
+            "1",
+            "--training.output_dir",
+            str(output_dir),
+            "--eval.eval_every",
+            "1",
+            "--wandb.enabled",
+            "false",
+        ],
+    )
+
+    records = [
+        json.loads(line)
+        for line in (output_dir / "metrics.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    eval_record = next(record for record in records if "eval/tokens" in record)
+
+    assert eval_record["eval/tokens"] == 32
