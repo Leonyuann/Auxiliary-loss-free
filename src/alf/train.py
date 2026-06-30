@@ -21,8 +21,13 @@ from alf.eval import evaluate_model
 from alf.metrics import (
     activation_matrix_from_counts,
     activation_rows_from_counts,
+    add_bias_update_deltas,
     add_layer_counts,
     append_jsonl,
+    bias_update_matrix_from_deltas,
+    bias_update_rows_from_deltas,
+    collect_bias_update_deltas,
+    collect_bias_update_steps,
     collect_expert_load_counts,
     collect_router_metrics,
     loss_breakdown,
@@ -88,6 +93,7 @@ def train(config_path: str | Path, overrides: list[str] | None = None) -> Path:
     if config.training.resume_from:
         start_step = _load_checkpoint(Path(config.training.resume_from), model, optimizer, scheduler)
 
+    router_bias_update_steps = collect_bias_update_steps(model)
     metrics_path = output_dir / "metrics.jsonl"
     step = start_step
     progress = tqdm(total=config.training.max_steps, initial=start_step, desc=config.name)
@@ -104,6 +110,8 @@ def train(config_path: str | Path, overrides: list[str] | None = None) -> Path:
             loss_totals = {"loss": 0.0, "lm_loss": 0.0, "aux_loss": 0.0, "aux_loss_scaled": 0.0}
             tokens = 0
             step_layer_counts: dict[str, torch.Tensor] = {}
+            step_bias_deltas: dict[str, torch.Tensor] = {}
+            bias_update_events = 0
 
             for _ in range(config.training.gradient_accumulation_steps):
                 batch = next(data_iter)
@@ -116,6 +124,9 @@ def train(config_path: str | Path, overrides: list[str] | None = None) -> Path:
                     loss_totals[key] += breakdown[key] / config.training.gradient_accumulation_steps
                 tokens += int(batch["input_ids"].numel())
                 add_layer_counts(step_layer_counts, collect_expert_load_counts(model))
+                bias_deltas, update_events = collect_bias_update_deltas(model, router_bias_update_steps)
+                add_bias_update_deltas(step_bias_deltas, bias_deltas)
+                bias_update_events += update_events
 
             grad_norm = _gradient_norm(model)
             optimizer.step()
@@ -125,9 +136,11 @@ def train(config_path: str | Path, overrides: list[str] | None = None) -> Path:
 
             elapsed = max(time.perf_counter() - step_start, 1e-9)
             maxvio_batch = mean_maxvio(step_layer_counts)
-            activation_matrix, _ = activation_matrix_from_counts(step_layer_counts)
-            activation_matrix_json = serialize_activation_matrix(activation_matrix, _)
+            activation_matrix, activation_layers = activation_matrix_from_counts(step_layer_counts)
+            activation_matrix_json = serialize_activation_matrix(activation_matrix, activation_layers)
             activation_rows = activation_rows_from_counts(step_layer_counts, step=step, split="train")
+            bias_update_matrix, bias_update_layers = bias_update_matrix_from_deltas(step_bias_deltas)
+            bias_update_rows = bias_update_rows_from_deltas(step_bias_deltas, step=step)
 
             record: dict[str, Any] = {
                 "step": step,
@@ -140,6 +153,7 @@ def train(config_path: str | Path, overrides: list[str] | None = None) -> Path:
                     "grad_norm": grad_norm,
                     "tokens_per_second": tokens / elapsed,
                     "maxvio_batch": maxvio_batch,
+                    "bias_update_events": bias_update_events,
                 },
                 "router": collect_router_metrics(model),
                 "expert_activation": {
@@ -149,14 +163,26 @@ def train(config_path: str | Path, overrides: list[str] | None = None) -> Path:
                     }
                 },
             }
+            if bias_update_events > 0:
+                record["bias_update"] = {
+                    "train": {
+                        "events": bias_update_events,
+                        "matrix": serialize_activation_matrix(bias_update_matrix, bias_update_layers),
+                        "rows": bias_update_rows,
+                    }
+                }
 
-            if step % config.training.log_every == 0 or step == config.training.max_steps:
+            should_log_step = step % config.training.log_every == 0 or step == config.training.max_steps
+            if should_log_step:
                 maxvio_window.append(maxvio_batch)
                 record["train"]["maxvio_batch_rolling_100"] = float(sum(maxvio_window) / len(maxvio_window))
                 append_jsonl(metrics_path, record)
                 logger.log(record, step=step)
                 logger.log_expert_activation_heatmap("train/expert_activation", activation_matrix, step=step)
                 logger.log_expert_activation_table("train/expert_activation", activation_rows, step=step)
+                if bias_update_events > 0:
+                    logger.log_bias_update_heatmap("train/bias_update", bias_update_matrix, step=step)
+                    logger.log_expert_activation_table("train/bias_update", bias_update_rows, step=step)
                 progress.set_postfix(loss=f"{loss_totals['loss']:.4f}")
 
             if _should_evaluate(step, config.eval.eval_every, config.training.max_steps):

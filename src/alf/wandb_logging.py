@@ -128,17 +128,65 @@ class ExperimentLogger:
             step: Optional training step.
         """
 
+        self._log_layer_expert_heatmap(name, matrix, step=step, cmap="viridis")
+
+    def log_bias_update_heatmap(self, name: str, matrix: Any, step: int | None = None) -> None:
+        """Log a per-layer, per-expert bias update matrix as a W&B heatmap.
+
+        Args:
+            name: Metric namespace for the image.
+            matrix: Two-dimensional matrix of expert-bias update deltas.
+            step: Optional training step.
+        """
+
+        self._log_layer_expert_heatmap(
+            name,
+            matrix,
+            step=step,
+            cmap="coolwarm",
+            center_zero=True,
+            colorbar_label="Bias delta",
+        )
+
+    def _log_layer_expert_heatmap(
+        self,
+        name: str,
+        matrix: Any,
+        *,
+        step: int | None = None,
+        cmap: str = "viridis",
+        center_zero: bool = False,
+        colorbar_label: str | None = None,
+    ) -> None:
+        """Log a layer-by-expert matrix as a W&B image heatmap."""
+
         if not self.enabled or self.run is None or self._wandb is None:
             return
 
         import matplotlib.pyplot as plt
+        import numpy as np
+        from matplotlib.colors import TwoSlopeNorm
+
+        values = np.asarray(_to_python_array(matrix), dtype=float)
+        if values.size == 0:
+            return
+
+        norm = None
+        if center_zero:
+            finite_values = values[np.isfinite(values)]
+            if finite_values.size:
+                limit = float(np.abs(finite_values).max())
+                if limit > 0.0:
+                    norm = TwoSlopeNorm(vmin=-limit, vcenter=0.0, vmax=limit)
 
         fig, ax = plt.subplots(figsize=(6, 4), constrained_layout=True)
-        image = ax.imshow(_to_python_array(matrix), aspect="auto", interpolation="nearest")
+        image = ax.imshow(values, aspect="auto", interpolation="nearest", cmap=cmap, norm=norm)
         ax.set_xlabel("Expert")
         ax.set_ylabel("Layer")
         ax.set_title(name)
-        fig.colorbar(image, ax=ax)
+        colorbar = fig.colorbar(image, ax=ax)
+        if colorbar_label is not None:
+            colorbar.set_label(colorbar_label)
         try:
             self.run.log({f"{name}/heatmap": self._wandb.Image(fig)}, step=step)
         finally:

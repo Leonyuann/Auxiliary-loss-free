@@ -146,6 +146,70 @@ def add_layer_counts(destination: dict[str, Tensor], source: dict[str, Tensor]) 
             destination[layer_name] = destination[layer_name] + counts.detach().cpu()
 
 
+def collect_bias_update_steps(model: nn.Module) -> dict[str, int]:
+    """Collect the current ALF bias update counters by router name.
+
+    Args:
+        model: Model that may contain auxiliary-loss-free routers.
+
+    Returns:
+        Mapping from router names to their current bias-update step counts.
+    """
+
+    update_steps: dict[str, int] = {}
+    for module_name, module in model.named_modules():
+        if isinstance(module, Qwen3MoeAuxiliaryLossFreeTopKRouter):
+            update_steps[module_name] = int(module.bias_update_steps.item())
+    return update_steps
+
+
+def collect_bias_update_deltas(
+    model: nn.Module,
+    previous_update_steps: dict[str, int],
+) -> tuple[dict[str, Tensor], int]:
+    """Collect ALF bias deltas that were newly applied since the last check.
+
+    Args:
+        model: Model that may contain auxiliary-loss-free routers.
+        previous_update_steps: Mutable router-name to update-counter mapping.
+
+    Returns:
+        A tuple of newly applied per-router bias deltas and total update events.
+
+    Notes:
+        The router only stores the latest delta, so callers should invoke this
+        after each forward pass when exact per-update tracking is needed.
+    """
+
+    bias_deltas: dict[str, Tensor] = {}
+    update_events = 0
+    for module_name, module in model.named_modules():
+        if not isinstance(module, Qwen3MoeAuxiliaryLossFreeTopKRouter):
+            continue
+        current_steps = int(module.bias_update_steps.item())
+        previous_steps = previous_update_steps.get(module_name, current_steps)
+        if current_steps > previous_steps:
+            bias_deltas[module_name] = module.last_bias_delta.detach().cpu().clone()
+            update_events += current_steps - previous_steps
+        previous_update_steps[module_name] = current_steps
+    return bias_deltas, update_events
+
+
+def add_bias_update_deltas(destination: dict[str, Tensor], source: dict[str, Tensor]) -> None:
+    """Accumulate bias update deltas by router name.
+
+    Args:
+        destination: Mutable accumulated deltas.
+        source: Newly collected deltas.
+    """
+
+    for layer_name, delta in source.items():
+        if layer_name not in destination:
+            destination[layer_name] = delta.detach().to(dtype=torch.float32, device="cpu").clone()
+        else:
+            destination[layer_name] = destination[layer_name] + delta.detach().to(dtype=torch.float32, device="cpu")
+
+
 def activation_matrix_from_counts(layer_counts: dict[str, Tensor]) -> tuple[Tensor, list[str]]:
     """Convert per-layer counts into a layer-by-expert fraction matrix.
 
@@ -166,6 +230,29 @@ def activation_matrix_from_counts(layer_counts: dict[str, Tensor]) -> tuple[Tens
         if counts.numel() < max_experts:
             fractions = torch.nn.functional.pad(fractions, (0, max_experts - counts.numel()))
         rows.append(fractions)
+    if not rows:
+        return torch.zeros((0, 0), dtype=torch.float32), []
+    return torch.stack(rows), layer_names
+
+
+def bias_update_matrix_from_deltas(layer_deltas: dict[str, Tensor]) -> tuple[Tensor, list[str]]:
+    """Convert per-layer bias deltas into a layer-by-expert matrix.
+
+    Args:
+        layer_deltas: Mapping from router names to per-expert bias deltas.
+
+    Returns:
+        A tuple of bias-update matrix and row layer names.
+    """
+
+    layer_names = sorted(layer_deltas, key=_layer_sort_key)
+    rows: list[Tensor] = []
+    max_experts = max((int(layer_deltas[name].numel()) for name in layer_names), default=0)
+    for layer_name in layer_names:
+        delta = layer_deltas[layer_name].detach().to(dtype=torch.float32, device="cpu")
+        if delta.numel() < max_experts:
+            delta = torch.nn.functional.pad(delta, (0, max_experts - delta.numel()))
+        rows.append(delta)
     if not rows:
         return torch.zeros((0, 0), dtype=torch.float32), []
     return torch.stack(rows), layer_names
@@ -202,6 +289,37 @@ def activation_rows_from_counts(
                     "expert": expert_index,
                     "count": int(count),
                     "fraction": 0.0 if total == 0.0 else float(count / total),
+                }
+            )
+    return rows
+
+
+def bias_update_rows_from_deltas(
+    layer_deltas: dict[str, Tensor],
+    *,
+    step: int | None,
+) -> list[dict[str, Any]]:
+    """Create table rows for per-expert bias update deltas.
+
+    Args:
+        layer_deltas: Mapping from router names to per-expert bias deltas.
+        step: Optional training step.
+
+    Returns:
+        JSON/W&B table rows.
+    """
+
+    rows: list[dict[str, Any]] = []
+    for layer_index, layer_name in enumerate(sorted(layer_deltas, key=_layer_sort_key)):
+        delta = layer_deltas[layer_name].detach().to(dtype=torch.float32, device="cpu")
+        for expert_index, value in enumerate(delta.tolist()):
+            rows.append(
+                {
+                    "step": step,
+                    "layer_index": layer_index,
+                    "layer": layer_name,
+                    "expert": expert_index,
+                    "bias_delta": float(value),
                 }
             )
     return rows
@@ -437,8 +555,13 @@ __all__ = [
     "append_jsonl",
     "activation_matrix_from_counts",
     "activation_rows_from_counts",
+    "add_bias_update_deltas",
     "add_layer_counts",
+    "bias_update_matrix_from_deltas",
+    "bias_update_rows_from_deltas",
     "collect_auxiliary_loss_free_router_metrics",
+    "collect_bias_update_deltas",
+    "collect_bias_update_steps",
     "collect_expert_load_counts",
     "collect_router_metrics",
     "compute_maxvio",
