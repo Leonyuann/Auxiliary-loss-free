@@ -8,7 +8,7 @@ import torch
 from safetensors.torch import load_file
 
 from alf.inspect import inspect_router
-from alf.train import train
+from alf.train import _build_scheduler, train
 
 
 def test_train_resume_restores_model_state(tmp_path: Path) -> None:
@@ -188,3 +188,19 @@ def test_validation_files_are_used_for_eval_metrics(tmp_path: Path) -> None:
     eval_record = next(record for record in records if "eval/tokens" in record)
 
     assert eval_record["eval/tokens"] == 32
+
+def test_cosine_scheduler_decays_after_warmup() -> None:
+    """Cosine scheduler should warm up and then anneal toward zero."""
+
+    parameter = torch.nn.Parameter(torch.tensor(1.0))
+    optimizer = torch.optim.AdamW([parameter], lr=0.1)
+    scheduler = _build_scheduler(optimizer, 0.1, 1, max_steps=4, scheduler_type="cosine")
+
+    lrs = []
+    for _ in range(4):
+        optimizer.step()
+        scheduler.step()
+        lrs.append(scheduler.get_last_lr()[0])
+
+    assert lrs[0] > lrs[-1]
+    assert lrs[-1] == 0.0

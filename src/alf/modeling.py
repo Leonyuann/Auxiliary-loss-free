@@ -154,6 +154,7 @@ def replace_qwen3_moe_routers(
     expert_bias_update_rate: float = 0.0,
     expert_bias_update_policy: str = "proportional",
     expert_bias_update_interval: int = 1,
+    expert_bias_ema_beta: float = 0.9,
     expert_bias_clip: float | None = None,
     expert_bias_warmup_steps: int = 0,
     disable_original_router_aux_loss: bool = True,
@@ -167,6 +168,7 @@ def replace_qwen3_moe_routers(
         expert_bias_update_rate: Update magnitude used for load-balancing bias steps.
         expert_bias_update_policy: Bias update policy.
         expert_bias_update_interval: Number of training forwards between updates.
+        expert_bias_ema_beta: EMA coefficient for the ``ema`` bias update policy.
         expert_bias_clip: Optional symmetric clip magnitude for bias entries.
         expert_bias_warmup_steps: Number of training forwards to skip before updates.
         disable_original_router_aux_loss: Whether to zero the original router
@@ -198,6 +200,7 @@ def replace_qwen3_moe_routers(
             expert_bias_update_rate=expert_bias_update_rate,
             expert_bias_update_policy=expert_bias_update_policy,
             expert_bias_update_interval=expert_bias_update_interval,
+            expert_bias_ema_beta=expert_bias_ema_beta,
             expert_bias_clip=expert_bias_clip,
             expert_bias_warmup_steps=expert_bias_warmup_steps,
         )
@@ -253,6 +256,7 @@ def apply_aux_loss_free_router(model: nn.Module, alf_config: Any | None = None) 
         expert_bias_update_rate=float(_config_value(alf_config, "bias_update_rate", 0.0)),
         expert_bias_update_policy=str(_config_value(alf_config, "bias_update_policy", "proportional")),
         expert_bias_update_interval=int(_config_value(alf_config, "update_interval", 1)),
+        expert_bias_ema_beta=float(_config_value(alf_config, "bias_ema_beta", 0.9)),
         expert_bias_clip=_config_value(alf_config, "bias_clip", None),
         expert_bias_warmup_steps=int(_config_value(alf_config, "warmup_steps", 0)),
         disable_original_router_aux_loss=bool(_config_value(alf_config, "disable_router_aux_loss", True)),
@@ -295,7 +299,8 @@ def build_model_and_tokenizer(model_config: ModelConfig, alf_config: AlfConfig) 
             max_position_embeddings=512,
         )
         model = Qwen3MoeForCausalLM(config)
-        tokenizer = SimpleByteTokenizer(model_config.vocab_size)
+        model.to(dtype=_torch_dtype(model_config.torch_dtype))
+        tokenizer = _load_tokenizer_for_tiny_model(model_config)
     else:
         if model_config.model_name_or_path is None:
             raise ValueError("model.model_name_or_path is required when use_tiny_config is False.")
@@ -316,6 +321,28 @@ def build_model_and_tokenizer(model_config: ModelConfig, alf_config: AlfConfig) 
     else:
         attach_router_load_tracking(model)
     return model, tokenizer
+
+
+def _load_tokenizer_for_tiny_model(model_config: ModelConfig) -> Any:
+    """Load the configured tokenizer for a tiny model, or use a byte fallback."""
+
+    if model_config.tokenizer_name_or_path is None:
+        return SimpleByteTokenizer(model_config.vocab_size)
+    if AutoTokenizer is None:
+        raise ImportError("Transformers is required to load model.tokenizer_name_or_path.")
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_config.tokenizer_name_or_path,
+        trust_remote_code=model_config.trust_remote_code,
+    )
+    tokenizer_size = len(tokenizer)
+    if tokenizer_size != int(model_config.vocab_size):
+        raise ValueError(
+            "Configured tokenizer vocabulary size does not match model.vocab_size: "
+            f"len(tokenizer)={tokenizer_size}, vocab_size={model_config.vocab_size}."
+        )
+    if getattr(tokenizer, "pad_token_id", None) is None and getattr(tokenizer, "eos_token", None) is not None:
+        tokenizer.pad_token = tokenizer.eos_token
+    return tokenizer
 
 
 def attach_router_load_tracking(model: nn.Module) -> dict[str, Any]:

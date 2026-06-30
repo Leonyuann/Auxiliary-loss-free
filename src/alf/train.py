@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import random
 import shutil
 import time
@@ -75,7 +76,13 @@ def train(config_path: str | Path, overrides: list[str] | None = None) -> Path:
         lr=config.training.learning_rate,
         weight_decay=config.training.weight_decay,
     )
-    scheduler = _build_scheduler(optimizer, config.training.learning_rate, config.training.warmup_steps)
+    scheduler = _build_scheduler(
+        optimizer,
+        config.training.learning_rate,
+        config.training.warmup_steps,
+        max_steps=config.training.max_steps,
+        scheduler_type=config.training.scheduler_type,
+    )
 
     start_step = 0
     if config.training.resume_from:
@@ -377,34 +384,30 @@ def _build_scheduler(
     optimizer: torch.optim.Optimizer,
     learning_rate: float,
     warmup_steps: int,
+    *,
+    max_steps: int | None = None,
+    scheduler_type: str = "constant",
 ) -> torch.optim.lr_scheduler.LambdaLR:
-    """Build a linear warmup scheduler.
-
-    Args:
-        optimizer: Optimizer to schedule.
-        learning_rate: Target learning rate.
-        warmup_steps: Number of warmup steps.
-
-    Returns:
-        LambdaLR scheduler.
-    """
+    """Build a warmup scheduler with optional cosine annealing."""
 
     for group in optimizer.param_groups:
         group["lr"] = learning_rate
 
+    normalized_type = scheduler_type.lower().replace("-", "_")
+    if normalized_type not in {"constant", "cosine", "cosine_annealing"}:
+        raise ValueError(f"Unsupported scheduler_type: {scheduler_type!r}")
+    if normalized_type in {"cosine", "cosine_annealing"} and max_steps is None:
+        raise ValueError("max_steps is required for cosine scheduler.")
+
     def lr_lambda(step: int) -> float:
-        """Return warmup LR multiplier.
-
-        Args:
-            step: Scheduler step index.
-
-        Returns:
-            Learning-rate multiplier.
-        """
-
-        if warmup_steps <= 0:
+        if warmup_steps > 0 and step < warmup_steps:
+            return float(step + 1) / float(warmup_steps)
+        if normalized_type == "constant":
             return 1.0
-        return min(1.0, float(step + 1) / float(warmup_steps))
+        assert max_steps is not None
+        decay_steps = max(1, int(max_steps) - int(warmup_steps))
+        progress = min(1.0, max(0.0, float(step - warmup_steps + 1) / float(decay_steps)))
+        return 0.5 * (1.0 + math.cos(math.pi * progress))
 
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
 

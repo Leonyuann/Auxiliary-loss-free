@@ -50,6 +50,14 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         last_bias_delta: Last applied expert-bias update delta.
     """
 
+    _FLOAT32_CONTROL_BUFFERS = (
+        "expert_bias",
+        "last_load_fraction",
+        "last_bias_delta",
+        "load_error_ema",
+        "load_error_accumulator",
+    )
+
     def __init__(
         self,
         *,
@@ -61,6 +69,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         expert_bias_update_rate: float = 0.0,
         expert_bias_update_policy: str = "proportional",
         expert_bias_update_interval: int = 1,
+        expert_bias_ema_beta: float = 0.9,
         expert_bias_clip: float | None = None,
         expert_bias_warmup_steps: int = 0,
     ) -> None:
@@ -100,11 +109,15 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         if expert_bias_clip is not None and expert_bias_clip < 0.0:
             msg = f"expert_bias_clip must be non-negative, got {expert_bias_clip}."
             raise ValueError(msg)
-        if expert_bias_update_policy not in {"proportional", "sign"}:
+        valid_policies = {"proportional", "sign", "ema", "accumulated_sign"}
+        if expert_bias_update_policy not in valid_policies:
             msg = (
                 "expert_bias_update_policy must be one of "
-                f"{('proportional', 'sign')}, got {expert_bias_update_policy!r}."
+                f"{tuple(sorted(valid_policies))}, got {expert_bias_update_policy!r}."
             )
+            raise ValueError(msg)
+        if not 0.0 <= expert_bias_ema_beta < 1.0:
+            msg = f"expert_bias_ema_beta must satisfy 0 <= beta < 1, got {expert_bias_ema_beta}."
             raise ValueError(msg)
 
         self.top_k = int(num_experts_per_tok)
@@ -114,6 +127,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         self.expert_bias_update_rate = float(expert_bias_update_rate)
         self.expert_bias_update_policy = expert_bias_update_policy
         self.expert_bias_update_interval = int(expert_bias_update_interval)
+        self.expert_bias_ema_beta = float(expert_bias_ema_beta)
         self.expert_bias_clip = None if expert_bias_clip is None else float(expert_bias_clip)
         self.expert_bias_warmup_steps = int(expert_bias_warmup_steps)
 
@@ -127,6 +141,25 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         self.register_buffer("last_expert_load", torch.zeros(self.num_experts, dtype=torch.long))
         self.register_buffer("last_load_fraction", torch.zeros(self.num_experts, dtype=torch.float32))
         self.register_buffer("last_bias_delta", torch.zeros(self.num_experts, dtype=torch.float32))
+        self.register_buffer("load_error_ema", torch.zeros(self.num_experts, dtype=torch.float32))
+        self.register_buffer("load_error_accumulator", torch.zeros(self.num_experts, dtype=torch.float32))
+
+    def _apply(self, fn: Any, recurse: bool = True) -> "Qwen3MoeAuxiliaryLossFreeTopKRouter":
+        """Apply module conversions while keeping router control state in fp32."""
+
+        saved_buffers = {}
+        for buffer_name in self._FLOAT32_CONTROL_BUFFERS:
+            buffer = getattr(self, buffer_name, None)
+            if torch.is_tensor(buffer) and buffer.is_floating_point():
+                saved_buffers[buffer_name] = buffer.detach().float().clone()
+
+        super()._apply(fn, recurse=recurse)
+
+        for buffer_name, saved_buffer in saved_buffers.items():
+            converted_buffer = getattr(self, buffer_name, None)
+            if torch.is_tensor(converted_buffer):
+                setattr(self, buffer_name, saved_buffer.to(device=converted_buffer.device, dtype=torch.float32))
+        return self
 
     @classmethod
     def from_qwen3_router(
@@ -137,6 +170,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         expert_bias_update_rate: float = 0.0,
         expert_bias_update_policy: str = "proportional",
         expert_bias_update_interval: int = 1,
+        expert_bias_ema_beta: float = 0.9,
         expert_bias_clip: float | None = None,
         expert_bias_warmup_steps: int = 0,
     ) -> "Qwen3MoeAuxiliaryLossFreeTopKRouter":
@@ -167,6 +201,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
             expert_bias_update_rate=expert_bias_update_rate,
             expert_bias_update_policy=expert_bias_update_policy,
             expert_bias_update_interval=expert_bias_update_interval,
+            expert_bias_ema_beta=expert_bias_ema_beta,
             expert_bias_clip=expert_bias_clip,
             expert_bias_warmup_steps=expert_bias_warmup_steps,
         )
@@ -206,20 +241,36 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
             if current_step <= self.expert_bias_warmup_steps:
                 return
 
-            steps_after_warmup = current_step - self.expert_bias_warmup_steps
-            if steps_after_warmup % self.expert_bias_update_interval != 0:
-                return
-
             target_fraction = torch.full_like(self.last_load_fraction, 1.0 / float(self.num_experts))
             load_error = target_fraction - self.last_load_fraction
-            if self.expert_bias_update_policy == "sign":
-                bias_delta = self.expert_bias_update_rate * load_error.sign()
+            steps_after_warmup = current_step - self.expert_bias_warmup_steps
+
+            if self.expert_bias_update_policy == "accumulated_sign":
+                self.load_error_accumulator.add_(
+                    load_error.to(device=self.load_error_accumulator.device, dtype=self.load_error_accumulator.dtype)
+                )
+                if steps_after_warmup % self.expert_bias_update_interval != 0:
+                    return
+                bias_delta = self.expert_bias_update_rate * self.load_error_accumulator.sign()
+                self.load_error_accumulator.zero_()
             else:
-                bias_delta = self.expert_bias_update_rate * load_error
+                if steps_after_warmup % self.expert_bias_update_interval != 0:
+                    return
+                if self.expert_bias_update_policy == "sign":
+                    bias_delta = self.expert_bias_update_rate * load_error.sign()
+                elif self.expert_bias_update_policy == "ema":
+                    self.load_error_ema.mul_(self.expert_bias_ema_beta).add_(
+                        load_error.to(device=self.load_error_ema.device, dtype=self.load_error_ema.dtype),
+                        alpha=1.0 - self.expert_bias_ema_beta,
+                    )
+                    bias_delta = self.expert_bias_update_rate * self.load_error_ema
+                else:
+                    bias_delta = self.expert_bias_update_rate * load_error
+
             self.expert_bias.add_(bias_delta.to(device=self.expert_bias.device, dtype=self.expert_bias.dtype))
             if self.expert_bias_clip is not None:
                 self.expert_bias.clamp_(-self.expert_bias_clip, self.expert_bias_clip)
-            self.last_bias_delta.copy_(bias_delta.to(device=self.last_bias_delta.device))
+            self.last_bias_delta.copy_(bias_delta.to(device=self.last_bias_delta.device, dtype=self.last_bias_delta.dtype))
             self.bias_update_steps.add_(1)
 
     def forward(self, hidden_states: Tensor) -> tuple[Tensor, Tensor, Tensor]:

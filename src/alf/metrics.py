@@ -303,11 +303,16 @@ def summarize_auxiliary_loss_free_router(
         "num_experts": int(router.num_experts),
         "top_k": int(router.top_k),
         "bias_update_policy": router.expert_bias_update_policy,
+        "bias_ema_beta": float(getattr(router, "expert_bias_ema_beta", 0.9)),
         "training_steps": int(router.training_steps.item()),
         "bias_update_steps": int(router.bias_update_steps.item()),
         "load": summarize_expert_load(counts=router.last_expert_load),
         "bias": summarize_expert_bias(router.expert_bias),
         "last_bias_delta": [float(value) for value in router.last_bias_delta.detach().cpu().tolist()],
+        "load_error_ema": [float(value) for value in router.load_error_ema.detach().cpu().tolist()],
+        "load_error_accumulator": [
+            float(value) for value in router.load_error_accumulator.detach().cpu().tolist()
+        ],
     }
 
 

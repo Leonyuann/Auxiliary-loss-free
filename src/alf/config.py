@@ -97,6 +97,7 @@ class TrainingConfig:
     learning_rate: float = 3e-4
     weight_decay: float = 0.0
     warmup_steps: int = 0
+    scheduler_type: str = "constant"
     log_every: int = 1
     save_every: int = 5
     resume_from: str | None = None
@@ -111,7 +112,8 @@ class AlfConfig:
         enabled: Whether to replace routers with auxiliary-loss-free routers.
         bias_update_rate: Magnitude of each load-balancing bias update.
         bias_update_policy: Bias update policy name. Supported values are
-            ``proportional`` and ``sign``.
+            ``proportional``, ``sign``, ``ema``, and ``accumulated_sign``.
+        bias_ema_beta: EMA coefficient used by the ``ema`` policy.
         bias_init: Initial expert bias value.
         bias_clip: Optional absolute clipping limit for expert bias.
         update_interval: Number of router calls between bias updates.
@@ -122,6 +124,7 @@ class AlfConfig:
     enabled: bool = True
     bias_update_rate: float = 1e-3
     bias_update_policy: str = "proportional"
+    bias_ema_beta: float = 0.9
     bias_init: float = 0.0
     bias_clip: float | None = 1.0
     update_interval: int = 1
@@ -159,8 +162,8 @@ class WandbConfig:
     """
 
     enabled: bool = True
-    entity: str | None = None
-    project: str | None = None
+    entity: str | None = "liangqingyuann-huazhong-university-of-science-and-technology"
+    project: str | None = "Load-balance"
     mode: str = "online"
     group: str | None = None
     tags: list[str] = field(default_factory=list)
