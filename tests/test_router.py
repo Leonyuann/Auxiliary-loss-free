@@ -64,8 +64,8 @@ def test_norm_topk_prob_renormalizes_selected_weights() -> None:
     assert torch.allclose(router_scores.sum(dim=-1), torch.ones(1))
 
 
-def test_bias_updates_only_during_training_and_tracks_load_direction() -> None:
-    """Overloaded experts should get lower bias while underloaded experts increase."""
+def test_bias_updates_only_during_training_and_tracks_load_direction_without_default_clip() -> None:
+    """Overloaded experts should get lower bias without default clipping."""
 
     router = Qwen3MoeAuxiliaryLossFreeTopKRouter(
         hidden_size=2,
@@ -76,7 +76,6 @@ def test_bias_updates_only_during_training_and_tracks_load_direction() -> None:
         expert_bias_update_rate=0.5,
         expert_bias_update_interval=1,
         expert_bias_warmup_steps=1,
-        expert_bias_clip=0.2,
     )
     with torch.no_grad():
         router.weight.zero_()
@@ -96,7 +95,7 @@ def test_bias_updates_only_during_training_and_tracks_load_direction() -> None:
     assert int(router.bias_update_steps.item()) == 0
 
     router(hidden_states)
-    assert torch.allclose(router.expert_bias, torch.tensor([0.2, -0.15]))
+    assert torch.allclose(router.expert_bias, torch.tensor([0.25, -0.15]))
     assert router.expert_bias.requires_grad is False
     assert int(router.training_steps.item()) == 2
     assert int(router.bias_update_steps.item()) == 1

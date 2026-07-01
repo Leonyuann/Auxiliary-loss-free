@@ -130,7 +130,7 @@ class AlfConfig:
     bias_ema_beta: float = 0.9
     bias_update_topk: int = 1
     bias_init: float = 0.0
-    bias_clip: float | None = 1.0
+    bias_clip: float | None = None
     update_interval: int = 1
     warmup_steps: int = 0
     disable_router_aux_loss: bool = True

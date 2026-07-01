@@ -25,7 +25,7 @@ config = ExperimentConfig(
         enabled=True,
         bias_update_rate=1e-3,
         bias_update_policy="proportional",
-        bias_clip=1.0,
+        bias_clip=None,
         disable_router_aux_loss=True,
     ),
     wandb=WandbConfig(enabled=True, tags=["alf", "qwen3-moe", "tiny"]),

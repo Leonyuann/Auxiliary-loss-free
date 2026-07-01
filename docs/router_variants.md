@@ -12,6 +12,8 @@ The ALF router preserves the Qwen3 MoE router forward contract:
 
 ## Bias Update Policies
 
+The paper does not clip expert bias values; standard experiment configs leave `bias_clip=None`.
+
 `proportional` updates each expert bias by the proportional load error:
 
 ```text

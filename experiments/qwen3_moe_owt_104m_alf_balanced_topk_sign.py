@@ -46,7 +46,7 @@ config = ExperimentConfig(
         bias_ema_beta=0.9,
         bias_update_topk=3,
         bias_init=0.0,
-        bias_clip=1.0,
+        bias_clip=None,
         update_interval=1,
         disable_router_aux_loss=True,
     ),
