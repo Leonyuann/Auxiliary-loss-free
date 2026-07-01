@@ -76,6 +76,8 @@ class FakeAlfConfig:
         bias_update_rate: Bias update rate.
         bias_update_policy: Bias update policy.
         update_interval: Number of forwards between bias updates.
+        bias_update_topk: Number of positive-error and negative-error experts
+            updated by balanced top-k sign.
         bias_clip: Optional absolute bias clipping value.
         warmup_steps: Number of forwards before updates begin.
         disable_router_aux_loss: Whether to zero Qwen's router aux-loss coefficient.
@@ -86,6 +88,7 @@ class FakeAlfConfig:
     bias_update_rate: float = 0.05
     bias_update_policy: str = "sign"
     update_interval: int = 4
+    bias_update_topk: int = 2
     bias_clip: float | None = 0.75
     warmup_steps: int = 2
     disable_router_aux_loss: bool = False
@@ -151,6 +154,7 @@ def test_apply_aux_loss_free_router_reads_alf_config_object() -> None:
         assert router.expert_bias_update_rate == 0.05
         assert router.expert_bias_update_policy == "sign"
         assert router.expert_bias_update_interval == 4
+        assert router.expert_bias_update_topk == 2
         assert router.expert_bias_clip == 0.75
         assert router.expert_bias_warmup_steps == 2
 

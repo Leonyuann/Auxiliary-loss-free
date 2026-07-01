@@ -39,6 +39,8 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         expert_bias_update_rate: Step size used when updating the expert bias.
         expert_bias_update_policy: Strategy used to convert load error into bias delta.
         expert_bias_update_interval: Number of training forwards between bias updates.
+        expert_bias_update_topk: Number of positive-error and negative-error experts
+            updated by the ``balanced_topk_sign`` policy.
         expert_bias_clip: Optional absolute clipping value for expert bias entries.
         expert_bias_warmup_steps: Number of training forwards to skip before updates.
         weight: Router projection weights with shape `(num_experts, hidden_dim)`.
@@ -70,6 +72,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         expert_bias_update_policy: str = "proportional",
         expert_bias_update_interval: int = 1,
         expert_bias_ema_beta: float = 0.9,
+        expert_bias_update_topk: int = 1,
         expert_bias_clip: float | None = None,
         expert_bias_warmup_steps: int = 0,
     ) -> None:
@@ -83,8 +86,11 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
             expert_bias_init: Initial scalar value copied into all expert bias entries.
             expert_bias_update_rate: Update magnitude used for load-balancing bias steps.
             expert_bias_update_policy: Bias update policy. Supported values are
-                `proportional` and `sign`.
+                `proportional`, `sign`, `ema`, `accumulated_sign`, and
+                `balanced_topk_sign`.
             expert_bias_update_interval: Number of training forwards between updates.
+            expert_bias_update_topk: Number of positive-error and negative-error experts
+                updated by the ``balanced_topk_sign`` policy.
             expert_bias_clip: Optional symmetric clip magnitude for bias entries.
             expert_bias_warmup_steps: Number of training forwards to skip before updates.
 
@@ -97,6 +103,10 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         _validate_positive("num_experts", num_experts)
         _validate_positive("num_experts_per_tok", num_experts_per_tok)
         _validate_positive("expert_bias_update_interval", expert_bias_update_interval)
+        _validate_positive("expert_bias_update_topk", expert_bias_update_topk)
+        if expert_bias_update_topk > num_experts:
+            msg = f"expert_bias_update_topk must be less than or equal to num_experts, got {expert_bias_update_topk}."
+            raise ValueError(msg)
         if num_experts_per_tok > num_experts:
             msg = (
                 "num_experts_per_tok must be less than or equal to num_experts, "
@@ -109,7 +119,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         if expert_bias_clip is not None and expert_bias_clip < 0.0:
             msg = f"expert_bias_clip must be non-negative, got {expert_bias_clip}."
             raise ValueError(msg)
-        valid_policies = {"proportional", "sign", "ema", "accumulated_sign"}
+        valid_policies = {"proportional", "sign", "ema", "accumulated_sign", "balanced_topk_sign"}
         if expert_bias_update_policy not in valid_policies:
             msg = (
                 "expert_bias_update_policy must be one of "
@@ -128,6 +138,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         self.expert_bias_update_policy = expert_bias_update_policy
         self.expert_bias_update_interval = int(expert_bias_update_interval)
         self.expert_bias_ema_beta = float(expert_bias_ema_beta)
+        self.expert_bias_update_topk = int(expert_bias_update_topk)
         self.expert_bias_clip = None if expert_bias_clip is None else float(expert_bias_clip)
         self.expert_bias_warmup_steps = int(expert_bias_warmup_steps)
 
@@ -171,6 +182,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         expert_bias_update_policy: str = "proportional",
         expert_bias_update_interval: int = 1,
         expert_bias_ema_beta: float = 0.9,
+        expert_bias_update_topk: int = 1,
         expert_bias_clip: float | None = None,
         expert_bias_warmup_steps: int = 0,
     ) -> "Qwen3MoeAuxiliaryLossFreeTopKRouter":
@@ -182,6 +194,8 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
             expert_bias_update_rate: Update magnitude used for load-balancing bias steps.
             expert_bias_update_policy: Bias update policy.
             expert_bias_update_interval: Number of training forwards between updates.
+            expert_bias_update_topk: Number of positive-error and negative-error experts
+                updated by the ``balanced_topk_sign`` policy.
             expert_bias_clip: Optional symmetric clip magnitude for bias entries.
             expert_bias_warmup_steps: Number of training forwards to skip before updates.
 
@@ -202,6 +216,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
             expert_bias_update_policy=expert_bias_update_policy,
             expert_bias_update_interval=expert_bias_update_interval,
             expert_bias_ema_beta=expert_bias_ema_beta,
+            expert_bias_update_topk=expert_bias_update_topk,
             expert_bias_clip=expert_bias_clip,
             expert_bias_warmup_steps=expert_bias_warmup_steps,
         )
@@ -258,6 +273,8 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
                     return
                 if self.expert_bias_update_policy == "sign":
                     bias_delta = self.expert_bias_update_rate * load_error.sign()
+                elif self.expert_bias_update_policy == "balanced_topk_sign":
+                    bias_delta = self.expert_bias_update_rate * self._balanced_topk_sign(load_error)
                 elif self.expert_bias_update_policy == "ema":
                     self.load_error_ema.mul_(self.expert_bias_ema_beta).add_(
                         load_error.to(device=self.load_error_ema.device, dtype=self.load_error_ema.dtype),
@@ -272,6 +289,28 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
                 self.expert_bias.clamp_(-self.expert_bias_clip, self.expert_bias_clip)
             self.last_bias_delta.copy_(bias_delta.to(device=self.last_bias_delta.device, dtype=self.last_bias_delta.dtype))
             self.bias_update_steps.add_(1)
+
+    def _balanced_topk_sign(self, load_error: Tensor) -> Tensor:
+        """Select equal-size positive and negative top-k sign updates."""
+
+        update_sign = torch.zeros_like(load_error)
+        positive_indices = torch.nonzero(load_error > 0, as_tuple=False).flatten()
+        negative_indices = torch.nonzero(load_error < 0, as_tuple=False).flatten()
+        selected_per_side = min(
+            self.expert_bias_update_topk,
+            int(positive_indices.numel()),
+            int(negative_indices.numel()),
+        )
+        if selected_per_side == 0:
+            return update_sign
+
+        positive_scores = load_error[positive_indices].abs()
+        negative_scores = load_error[negative_indices].abs()
+        positive_topk = positive_indices[torch.topk(positive_scores, k=selected_per_side).indices]
+        negative_topk = negative_indices[torch.topk(negative_scores, k=selected_per_side).indices]
+        update_sign[positive_topk] = 1.0
+        update_sign[negative_topk] = -1.0
+        return update_sign
 
     def forward(self, hidden_states: Tensor) -> tuple[Tensor, Tensor, Tensor]:
         """Route hidden states with bias-based selection and probability-based weights.

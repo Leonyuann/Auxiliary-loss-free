@@ -125,6 +125,31 @@ def test_sign_bias_update_policy_uses_fixed_step_direction() -> None:
     assert torch.allclose(router.last_bias_delta, torch.tensor([0.1, -0.1]))
 
 
+def test_balanced_topk_sign_updates_equal_positive_and_negative_extremes() -> None:
+    """Balanced top-k sign updates only the largest errors on each side."""
+
+    router = Qwen3MoeAuxiliaryLossFreeTopKRouter(
+        hidden_size=2,
+        num_experts=6,
+        num_experts_per_tok=1,
+        norm_topk_prob=False,
+        expert_bias_update_rate=0.1,
+        expert_bias_update_policy="balanced_topk_sign",
+        expert_bias_update_topk=2,
+    )
+
+    target_fraction = torch.full((6,), 1.0 / 6.0)
+    load_error = torch.tensor([0.01, 0.02, 0.03, -0.01, -0.02, -0.03])
+    with torch.no_grad():
+        router.last_load_fraction.copy_(target_fraction - load_error)
+
+    router._update_expert_bias()
+
+    assert torch.allclose(router.last_bias_delta, torch.tensor([0.0, 0.1, 0.1, 0.0, -0.1, -0.1]))
+    assert torch.allclose(router.expert_bias, torch.tensor([0.0, 0.1, 0.1, 0.0, -0.1, -0.1]))
+    assert int(router.bias_update_steps.item()) == 1
+
+
 def test_control_buffers_stay_float32_after_bfloat16_cast() -> None:
     """Small bias updates should survive when model weights use bfloat16."""
 
@@ -247,3 +272,22 @@ def test_invalid_ema_beta_raises() -> None:
         assert "expert_bias_ema_beta" in str(error)
     else:
         raise AssertionError("Expected ValueError")
+
+
+def test_invalid_balanced_topk_raises() -> None:
+    """Balanced top-k count must be positive and fit the expert count."""
+
+    for topk in (0, 3):
+        try:
+            Qwen3MoeAuxiliaryLossFreeTopKRouter(
+                hidden_size=2,
+                num_experts=2,
+                num_experts_per_tok=1,
+                norm_topk_prob=False,
+                expert_bias_update_policy="balanced_topk_sign",
+                expert_bias_update_topk=topk,
+            )
+        except ValueError as error:
+            assert "expert_bias_update_topk" in str(error)
+        else:
+            raise AssertionError("Expected ValueError")

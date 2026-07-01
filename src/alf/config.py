@@ -112,8 +112,11 @@ class AlfConfig:
         enabled: Whether to replace routers with auxiliary-loss-free routers.
         bias_update_rate: Magnitude of each load-balancing bias update.
         bias_update_policy: Bias update policy name. Supported values are
-            ``proportional``, ``sign``, ``ema``, and ``accumulated_sign``.
+            ``proportional``, ``sign``, ``ema``, ``accumulated_sign``, and
+            ``balanced_topk_sign``.
         bias_ema_beta: EMA coefficient used by the ``ema`` policy.
+        bias_update_topk: Number of positive-error and negative-error experts
+            updated by the ``balanced_topk_sign`` policy.
         bias_init: Initial expert bias value.
         bias_clip: Optional absolute clipping limit for expert bias.
         update_interval: Number of router calls between bias updates.
@@ -125,6 +128,7 @@ class AlfConfig:
     bias_update_rate: float = 1e-3
     bias_update_policy: str = "proportional"
     bias_ema_beta: float = 0.9
+    bias_update_topk: int = 1
     bias_init: float = 0.0
     bias_clip: float | None = 1.0
     update_interval: int = 1

@@ -422,6 +422,7 @@ def summarize_auxiliary_loss_free_router(
         "top_k": int(router.top_k),
         "bias_update_policy": router.expert_bias_update_policy,
         "bias_ema_beta": float(getattr(router, "expert_bias_ema_beta", 0.9)),
+        "bias_update_topk": int(getattr(router, "expert_bias_update_topk", 1)),
         "training_steps": int(router.training_steps.item()),
         "bias_update_steps": int(router.bias_update_steps.item()),
         "load": summarize_expert_load(counts=router.last_expert_load),
