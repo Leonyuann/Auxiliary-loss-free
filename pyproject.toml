@@ -10,8 +10,9 @@ dependencies = [
     "matplotlib>=3.11.0",
     "pytest>=9.1.1",
     "safetensors>=0.8.0",
-    "torch>=2.12.1",
+    "torch==2.10.0",
     "tqdm>=4.68.3",
+    "tokenizers>=0.22.0",
     "transformers>=5.12.1",
     "wandb>=0.28.0",
 ]
