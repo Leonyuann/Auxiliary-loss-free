@@ -24,7 +24,7 @@ config = ExperimentConfig(
     alf=AlfConfig(
         enabled=True,
         bias_update_rate=1e-3,
-        bias_update_policy="proportional",
+        bias_update_policy="sign",
         bias_clip=None,
         disable_router_aux_loss=True,
     ),

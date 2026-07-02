@@ -12,4 +12,5 @@ AGENTS.md
 
 # Experiment tracking outputs
 wandb/
+outputs
 outputs/
