@@ -156,6 +156,9 @@ def replace_qwen3_moe_routers(
     expert_bias_update_interval: int = 1,
     expert_bias_ema_beta: float = 0.9,
     expert_bias_update_topk: int = 1,
+    expert_bias_update_schedule: str = "constant",
+    expert_bias_update_schedule_steps: int | None = None,
+    expert_bias_update_end_rate: float = 0.0,
     expert_bias_clip: float | None = None,
     expert_bias_warmup_steps: int = 0,
     disable_original_router_aux_loss: bool = True,
@@ -172,6 +175,10 @@ def replace_qwen3_moe_routers(
         expert_bias_ema_beta: EMA coefficient for the ``ema`` bias update policy.
         expert_bias_update_topk: Number of positive-error and negative-error experts
             updated by the ``balanced_topk_sign`` policy.
+        expert_bias_update_schedule: Schedule used for bias update rates.
+        expert_bias_update_schedule_steps: Number of post-warmup training forwards
+            used by the schedule.
+        expert_bias_update_end_rate: Final bias update rate for scheduled decay.
         expert_bias_clip: Optional symmetric clip magnitude for bias entries.
         expert_bias_warmup_steps: Number of training forwards to skip before updates.
         disable_original_router_aux_loss: Whether to zero the original router
@@ -205,6 +212,9 @@ def replace_qwen3_moe_routers(
             expert_bias_update_interval=expert_bias_update_interval,
             expert_bias_ema_beta=expert_bias_ema_beta,
             expert_bias_update_topk=expert_bias_update_topk,
+            expert_bias_update_schedule=expert_bias_update_schedule,
+            expert_bias_update_schedule_steps=expert_bias_update_schedule_steps,
+            expert_bias_update_end_rate=expert_bias_update_end_rate,
             expert_bias_clip=expert_bias_clip,
             expert_bias_warmup_steps=expert_bias_warmup_steps,
         )
@@ -246,8 +256,9 @@ def apply_aux_loss_free_router(model: nn.Module, alf_config: Any | None = None) 
             in place.
         alf_config: Mapping, dataclass, or object exposing ALF fields. Supported
             fields are `enabled`, `bias_init`, `bias_update_rate`,
-            `bias_update_topk`, `update_interval`, `bias_clip`, `warmup_steps`, and
-            `disable_router_aux_loss`.
+            `bias_update_topk`, `bias_update_schedule`, `bias_update_schedule_steps`,
+            `bias_update_end_rate`, `update_interval`, `bias_clip`, `warmup_steps`,
+            and `disable_router_aux_loss`.
 
     Returns:
         A serializable summary with both replacement and patching aliases.
@@ -262,6 +273,9 @@ def apply_aux_loss_free_router(model: nn.Module, alf_config: Any | None = None) 
         expert_bias_update_interval=int(_config_value(alf_config, "update_interval", 1)),
         expert_bias_ema_beta=float(_config_value(alf_config, "bias_ema_beta", 0.9)),
         expert_bias_update_topk=int(_config_value(alf_config, "bias_update_topk", 1)),
+        expert_bias_update_schedule=str(_config_value(alf_config, "bias_update_schedule", "constant")),
+        expert_bias_update_schedule_steps=_config_value(alf_config, "bias_update_schedule_steps", None),
+        expert_bias_update_end_rate=float(_config_value(alf_config, "bias_update_end_rate", 0.0)),
         expert_bias_clip=_config_value(alf_config, "bias_clip", None),
         expert_bias_warmup_steps=int(_config_value(alf_config, "warmup_steps", 0)),
         disable_original_router_aux_loss=bool(_config_value(alf_config, "disable_router_aux_loss", True)),

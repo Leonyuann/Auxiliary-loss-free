@@ -43,6 +43,24 @@ test stronger discrete correction without scaling updates by the magnitude of lo
 imbalance. Use `balanced_topk_sign` when the experiment should keep equal numbers
 of upward and downward bias writes.
 
+## Bias Update Rate Schedules
+
+`bias_update_rate` is the initial bias learning rate `u`. The default
+`bias_update_schedule="constant"` keeps `u` unchanged. Set
+`bias_update_schedule="linear"` with `bias_update_schedule_steps` to linearly
+decay `u` from `bias_update_rate` to `bias_update_end_rate` over post-warmup
+router training forwards; after the schedule length, the end rate is held.
+
+```bash
+uv run alf-train experiments/qwen3_moe_tiny_alf.py \
+  --alf.bias_update_schedule linear \
+  --alf.bias_update_schedule_steps 1000 \
+  --alf.bias_update_end_rate 0.0
+```
+
+Future schedules, such as cosine annealing, should be added through the same
+router schedule branch so all bias update policies share the new rate behavior.
+
 The traditional auxiliary-loss baseline keeps the original Qwen3 router and uses a
 forward hook only to record expert load. That makes its load metrics comparable with
 ALF runs without changing the baseline routing behavior.

@@ -255,6 +255,52 @@ def test_accumulated_sign_updates_only_on_interval() -> None:
     assert torch.allclose(router.load_error_accumulator, torch.zeros(2))
 
 
+def test_linear_bias_update_schedule_decays_to_end_rate() -> None:
+    """Linear bias schedule should decay update magnitude over post-warmup steps."""
+
+    router = Qwen3MoeAuxiliaryLossFreeTopKRouter(
+        hidden_size=2,
+        num_experts=2,
+        num_experts_per_tok=1,
+        norm_topk_prob=False,
+        expert_bias_update_rate=0.3,
+        expert_bias_update_policy="sign",
+        expert_bias_update_schedule="linear",
+        expert_bias_update_schedule_steps=3,
+        expert_bias_update_end_rate=0.0,
+    )
+    observed_fraction = torch.tensor([0.0, 1.0])
+
+    expected_rates = [0.3, 0.15, 0.0, 0.0]
+    for expected_rate in expected_rates:
+        with torch.no_grad():
+            router.last_load_fraction.copy_(observed_fraction)
+        router._update_expert_bias()
+        assert torch.allclose(router.last_bias_delta, torch.tensor([expected_rate, -expected_rate]))
+        assert torch.isclose(router.last_bias_update_rate, torch.tensor(expected_rate))
+
+    assert torch.allclose(router.expert_bias, torch.tensor([0.45, -0.45]))
+
+
+def test_invalid_linear_bias_update_schedule_raises() -> None:
+    """Linear schedule requires an explicit positive schedule length."""
+
+    for schedule_steps in (None, 0):
+        try:
+            Qwen3MoeAuxiliaryLossFreeTopKRouter(
+                hidden_size=2,
+                num_experts=2,
+                num_experts_per_tok=1,
+                norm_topk_prob=False,
+                expert_bias_update_schedule="linear",
+                expert_bias_update_schedule_steps=schedule_steps,
+            )
+        except ValueError as error:
+            assert "expert_bias_update_schedule_steps" in str(error)
+        else:
+            raise AssertionError("Expected ValueError")
+
+
 def test_invalid_ema_beta_raises() -> None:
     """EMA beta must be in the half-open interval [0, 1)."""
 

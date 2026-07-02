@@ -123,8 +123,8 @@ The main dataclass groups are:
 - `TrainingConfig`: batch size, learning rate, training steps, checkpoint path, dtype,
   gradient accumulation, linear warmup steps, and logging interval.
 - `AlfConfig`: whether auxiliary-loss-free routing is enabled, bias initialization,
-  bias update rate, bias update policy, and whether to disable the original router
-  auxiliary loss.
+  bias update rate, bias update policy, bias update rate schedule, and whether to
+  disable the original router auxiliary loss.
 - `EvalConfig`: validation interval, validation batch size, and sample cap.
 - `WandbConfig`: W&B online/offline/disabled mode, entity/project, group, tags, and
   checkpoint artifact logging.

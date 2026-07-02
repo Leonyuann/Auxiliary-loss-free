@@ -117,6 +117,11 @@ class AlfConfig:
         bias_ema_beta: EMA coefficient used by the ``ema`` policy.
         bias_update_topk: Number of positive-error and negative-error experts
             updated by the ``balanced_topk_sign`` policy.
+        bias_update_schedule: Schedule for the bias update rate. Supported values are
+            ``constant`` and ``linear``.
+        bias_update_schedule_steps: Number of post-warmup router calls used by the
+            bias update schedule. Required for ``linear``.
+        bias_update_end_rate: Final bias update rate for scheduled decay.
         bias_init: Initial expert bias value.
         bias_clip: Optional absolute clipping limit for expert bias.
         update_interval: Number of router calls between bias updates.
@@ -129,6 +134,9 @@ class AlfConfig:
     bias_update_policy: str = "proportional"
     bias_ema_beta: float = 0.9
     bias_update_topk: int = 1
+    bias_update_schedule: str = "constant"
+    bias_update_schedule_steps: int | None = None
+    bias_update_end_rate: float = 0.0
     bias_init: float = 0.0
     bias_clip: float | None = None
     update_interval: int = 1

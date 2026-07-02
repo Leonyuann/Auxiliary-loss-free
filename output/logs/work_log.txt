@@ -38,3 +38,15 @@ Validation:
 - `uv run alf-train experiments/qwen3_moe_tiny_alf.py --training.max_steps 2 --training.output_dir /tmp/alf-wandb-smoke --training.save_every 2 --eval.eval_every 1 --wandb.enabled false`
 - `uv run alf-train experiments/qwen3_moe_tiny_aux_loss.py --training.max_steps 1 --training.output_dir /tmp/alf-wandb-aux-smoke --training.save_every 1 --eval.eval_every 1 --wandb.enabled false`
 - `uv run alf-inspect-router --checkpoint /tmp/alf-wandb-smoke/latest`
+
+2026-07-02 - Bias update learning-rate schedule
+
+Implemented configurable schedules for the ALF expert bias update rate. The default
+constant schedule preserves existing behavior, while the new linear schedule decays
+from bias_update_rate to bias_update_end_rate over a configured number of
+post-warmup router training forwards. The schedule is now wired through AlfConfig,
+model router replacement, router metrics, README/docs, and unit tests.
+
+Verification:
+- uv run pytest tests/test_router.py tests/test_config.py
+- uv run pytest

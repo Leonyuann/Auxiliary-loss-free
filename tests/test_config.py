@@ -18,9 +18,22 @@ def test_apply_dotted_overrides() -> None:
 
     config = load_experiment_config(
         "experiments/qwen3_moe_tiny_alf.py",
-        ["--training.max_steps", "2", "--alf.enabled=false", "--data.train_files=tests/fixtures/tiny_corpus.txt"],
+        [
+            "--training.max_steps",
+            "2",
+            "--alf.enabled=false",
+            "--alf.bias_update_schedule",
+            "linear",
+            "--alf.bias_update_schedule_steps",
+            "10",
+            "--alf.bias_update_end_rate=1e-5",
+            "--data.train_files=tests/fixtures/tiny_corpus.txt",
+        ],
     )
 
     assert config.training.max_steps == 2
     assert config.alf.enabled is False
+    assert config.alf.bias_update_schedule == "linear"
+    assert config.alf.bias_update_schedule_steps == 10
+    assert config.alf.bias_update_end_rate == 1e-5
     assert config.data.train_files == ["tests/fixtures/tiny_corpus.txt"]

@@ -41,6 +41,10 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         expert_bias_update_interval: Number of training forwards between bias updates.
         expert_bias_update_topk: Number of positive-error and negative-error experts
             updated by the ``balanced_topk_sign`` policy.
+        expert_bias_update_schedule: Schedule used for bias update rates.
+        expert_bias_update_schedule_steps: Number of post-warmup training forwards
+            used by the schedule.
+        expert_bias_update_end_rate: Final bias update rate for scheduled decay.
         expert_bias_clip: Optional absolute clipping value for expert bias entries.
         expert_bias_warmup_steps: Number of training forwards to skip before updates.
         weight: Router projection weights with shape `(num_experts, hidden_dim)`.
@@ -56,6 +60,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         "expert_bias",
         "last_load_fraction",
         "last_bias_delta",
+        "last_bias_update_rate",
         "load_error_ema",
         "load_error_accumulator",
     )
@@ -73,6 +78,9 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         expert_bias_update_interval: int = 1,
         expert_bias_ema_beta: float = 0.9,
         expert_bias_update_topk: int = 1,
+        expert_bias_update_schedule: str = "constant",
+        expert_bias_update_schedule_steps: int | None = None,
+        expert_bias_update_end_rate: float = 0.0,
         expert_bias_clip: float | None = None,
         expert_bias_warmup_steps: int = 0,
     ) -> None:
@@ -91,6 +99,11 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
             expert_bias_update_interval: Number of training forwards between updates.
             expert_bias_update_topk: Number of positive-error and negative-error experts
                 updated by the ``balanced_topk_sign`` policy.
+            expert_bias_update_schedule: Schedule used for bias update rates.
+                Supported values are ``constant`` and ``linear``.
+            expert_bias_update_schedule_steps: Number of post-warmup training forwards
+                used by the schedule. Required when using ``linear``.
+            expert_bias_update_end_rate: Final bias update rate for scheduled decay.
             expert_bias_clip: Optional symmetric clip magnitude for bias entries.
             expert_bias_warmup_steps: Number of training forwards to skip before updates.
 
@@ -119,6 +132,9 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         if expert_bias_clip is not None and expert_bias_clip < 0.0:
             msg = f"expert_bias_clip must be non-negative, got {expert_bias_clip}."
             raise ValueError(msg)
+        if expert_bias_update_end_rate < 0.0:
+            msg = f"expert_bias_update_end_rate must be non-negative, got {expert_bias_update_end_rate}."
+            raise ValueError(msg)
         valid_policies = {"proportional", "sign", "ema", "accumulated_sign", "balanced_topk_sign"}
         if expert_bias_update_policy not in valid_policies:
             msg = (
@@ -126,6 +142,18 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
                 f"{tuple(sorted(valid_policies))}, got {expert_bias_update_policy!r}."
             )
             raise ValueError(msg)
+        valid_schedules = {"constant", "linear"}
+        if expert_bias_update_schedule not in valid_schedules:
+            msg = (
+                "expert_bias_update_schedule must be one of "
+                f"{tuple(sorted(valid_schedules))}, got {expert_bias_update_schedule!r}."
+            )
+            raise ValueError(msg)
+        if expert_bias_update_schedule == "linear":
+            if expert_bias_update_schedule_steps is None:
+                msg = "expert_bias_update_schedule_steps is required for linear bias update schedule."
+                raise ValueError(msg)
+            _validate_positive("expert_bias_update_schedule_steps", expert_bias_update_schedule_steps)
         if not 0.0 <= expert_bias_ema_beta < 1.0:
             msg = f"expert_bias_ema_beta must satisfy 0 <= beta < 1, got {expert_bias_ema_beta}."
             raise ValueError(msg)
@@ -139,6 +167,11 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         self.expert_bias_update_interval = int(expert_bias_update_interval)
         self.expert_bias_ema_beta = float(expert_bias_ema_beta)
         self.expert_bias_update_topk = int(expert_bias_update_topk)
+        self.expert_bias_update_schedule = expert_bias_update_schedule
+        self.expert_bias_update_schedule_steps = (
+            None if expert_bias_update_schedule_steps is None else int(expert_bias_update_schedule_steps)
+        )
+        self.expert_bias_update_end_rate = float(expert_bias_update_end_rate)
         self.expert_bias_clip = None if expert_bias_clip is None else float(expert_bias_clip)
         self.expert_bias_warmup_steps = int(expert_bias_warmup_steps)
 
@@ -152,6 +185,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         self.register_buffer("last_expert_load", torch.zeros(self.num_experts, dtype=torch.long))
         self.register_buffer("last_load_fraction", torch.zeros(self.num_experts, dtype=torch.float32))
         self.register_buffer("last_bias_delta", torch.zeros(self.num_experts, dtype=torch.float32))
+        self.register_buffer("last_bias_update_rate", torch.zeros((), dtype=torch.float32))
         self.register_buffer("load_error_ema", torch.zeros(self.num_experts, dtype=torch.float32))
         self.register_buffer("load_error_accumulator", torch.zeros(self.num_experts, dtype=torch.float32))
 
@@ -183,6 +217,9 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         expert_bias_update_interval: int = 1,
         expert_bias_ema_beta: float = 0.9,
         expert_bias_update_topk: int = 1,
+        expert_bias_update_schedule: str = "constant",
+        expert_bias_update_schedule_steps: int | None = None,
+        expert_bias_update_end_rate: float = 0.0,
         expert_bias_clip: float | None = None,
         expert_bias_warmup_steps: int = 0,
     ) -> "Qwen3MoeAuxiliaryLossFreeTopKRouter":
@@ -196,6 +233,10 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
             expert_bias_update_interval: Number of training forwards between updates.
             expert_bias_update_topk: Number of positive-error and negative-error experts
                 updated by the ``balanced_topk_sign`` policy.
+            expert_bias_update_schedule: Schedule used for bias update rates.
+            expert_bias_update_schedule_steps: Number of post-warmup training forwards
+                used by the schedule.
+            expert_bias_update_end_rate: Final bias update rate for scheduled decay.
             expert_bias_clip: Optional symmetric clip magnitude for bias entries.
             expert_bias_warmup_steps: Number of training forwards to skip before updates.
 
@@ -217,6 +258,9 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
             expert_bias_update_interval=expert_bias_update_interval,
             expert_bias_ema_beta=expert_bias_ema_beta,
             expert_bias_update_topk=expert_bias_update_topk,
+            expert_bias_update_schedule=expert_bias_update_schedule,
+            expert_bias_update_schedule_steps=expert_bias_update_schedule_steps,
+            expert_bias_update_end_rate=expert_bias_update_end_rate,
             expert_bias_clip=expert_bias_clip,
             expert_bias_warmup_steps=expert_bias_warmup_steps,
         )
@@ -248,6 +292,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         with torch.no_grad():
             self.training_steps.add_(1)
             self.last_bias_delta.zero_()
+            self.last_bias_update_rate.zero_()
 
             if self.expert_bias_update_rate == 0.0:
                 return
@@ -259,6 +304,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
             target_fraction = torch.full_like(self.last_load_fraction, 1.0 / float(self.num_experts))
             load_error = target_fraction - self.last_load_fraction
             steps_after_warmup = current_step - self.expert_bias_warmup_steps
+            update_rate = self._scheduled_bias_update_rate(steps_after_warmup)
 
             if self.expert_bias_update_policy == "accumulated_sign":
                 self.load_error_accumulator.add_(
@@ -266,29 +312,55 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
                 )
                 if steps_after_warmup % self.expert_bias_update_interval != 0:
                     return
-                bias_delta = self.expert_bias_update_rate * self.load_error_accumulator.sign()
+                bias_delta = update_rate * self.load_error_accumulator.sign()
                 self.load_error_accumulator.zero_()
             else:
                 if steps_after_warmup % self.expert_bias_update_interval != 0:
                     return
                 if self.expert_bias_update_policy == "sign":
-                    bias_delta = self.expert_bias_update_rate * load_error.sign()
+                    bias_delta = update_rate * load_error.sign()
                 elif self.expert_bias_update_policy == "balanced_topk_sign":
-                    bias_delta = self.expert_bias_update_rate * self._balanced_topk_sign(load_error)
+                    bias_delta = update_rate * self._balanced_topk_sign(load_error)
                 elif self.expert_bias_update_policy == "ema":
                     self.load_error_ema.mul_(self.expert_bias_ema_beta).add_(
                         load_error.to(device=self.load_error_ema.device, dtype=self.load_error_ema.dtype),
                         alpha=1.0 - self.expert_bias_ema_beta,
                     )
-                    bias_delta = self.expert_bias_update_rate * self.load_error_ema
+                    bias_delta = update_rate * self.load_error_ema
                 else:
-                    bias_delta = self.expert_bias_update_rate * load_error
+                    bias_delta = update_rate * load_error
 
             self.expert_bias.add_(bias_delta.to(device=self.expert_bias.device, dtype=self.expert_bias.dtype))
             if self.expert_bias_clip is not None:
                 self.expert_bias.clamp_(-self.expert_bias_clip, self.expert_bias_clip)
             self.last_bias_delta.copy_(bias_delta.to(device=self.last_bias_delta.device, dtype=self.last_bias_delta.dtype))
+            self.last_bias_update_rate.fill_(float(update_rate))
             self.bias_update_steps.add_(1)
+
+    def _scheduled_bias_update_rate(self, steps_after_warmup: int) -> float:
+        """Compute the bias update rate for the current post-warmup step.
+
+        Args:
+            steps_after_warmup: One-indexed training forward count after warmup.
+
+        Returns:
+            The scalar bias update rate to apply for this step.
+        """
+
+        if self.expert_bias_update_schedule == "constant":
+            return self.expert_bias_update_rate
+
+        if self.expert_bias_update_schedule == "linear":
+            schedule_steps = int(self.expert_bias_update_schedule_steps or 1)
+            if schedule_steps <= 1:
+                return self.expert_bias_update_end_rate
+            progress = min(max((steps_after_warmup - 1) / float(schedule_steps - 1), 0.0), 1.0)
+            return self.expert_bias_update_rate + progress * (
+                self.expert_bias_update_end_rate - self.expert_bias_update_rate
+            )
+
+        msg = f"Unsupported expert_bias_update_schedule: {self.expert_bias_update_schedule!r}."
+        raise ValueError(msg)
 
     def _balanced_topk_sign(self, load_error: Tensor) -> Tensor:
         """Select equal-size positive and negative top-k sign updates."""

@@ -89,6 +89,11 @@ Supported ALF bias update policies:
 - `proportional`: update bias by the proportional load error.
 - `sign`: update bias by fixed-size steps from the load error direction.
 
+Bias update rate scheduling defaults to `--alf.bias_update_schedule constant`. Use
+`linear` with `--alf.bias_update_schedule_steps` to decay from
+`--alf.bias_update_rate` to `--alf.bias_update_end_rate` over post-warmup router
+training forwards.
+
 Checkpoints include the experiment config in `alf_experiment_config.json`, so a copied
 checkpoint directory can still be inspected with `alf-inspect-router`.
 
