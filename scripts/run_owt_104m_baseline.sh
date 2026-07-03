@@ -15,10 +15,12 @@ else
   exit 1
 fi
 
-data_root="${DATA_ROOT:-/xts001/alf}"
+data_root="${DATA_ROOT:-/vepfs/ylq}"
 owt_train="${OWT_TRAIN_TEXT:-/xts001/data/owt_train.txt}"
 owt_valid="${OWT_VALID_TEXT:-/xts001/data/owt_valid.txt}"
-owt_dir="$data_root/owt"
+owt_dir="${OWT_TOKEN_DIR:-$data_root/data}"
+train_token_file="${OWT_TRAIN_TOKEN_FILE:-$owt_dir/train_1310m_bpe32k_tokens.i32}"
+validation_token_file="${OWT_VALIDATION_TOKEN_FILE:-$owt_dir/validation_16m_bpe32k_tokens.i32}"
 tokenizer_dir="${TOKENIZER_DIR:-$data_root/tokenizers/owt_bpe_32k}"
 
 block_size="${BLOCK_SIZE:-512}"
@@ -41,7 +43,7 @@ fi
 
 "${python_cmd[@]}" scripts/prepare_text_bpe_tokens.py \
   --input "$owt_train" \
-  --output "$owt_dir/train_1310m_bpe32k_tokens.i32" \
+  --output "$train_token_file" \
   --tokenizer-dir "$tokenizer_dir" \
   --train-tokenizer-input "$owt_train" \
   --tokenizer-train-max-docs "${TOKENIZER_TRAIN_MAX_DOCS:-200000}" \
@@ -52,7 +54,7 @@ fi
 
 "${python_cmd[@]}" scripts/prepare_text_bpe_tokens.py \
   --input "$owt_valid" \
-  --output "$owt_dir/validation_16m_bpe32k_tokens.i32" \
+  --output "$validation_token_file" \
   --tokenizer-dir "$tokenizer_dir" \
   --vocab-size 32768 \
   --max-tokens "$validation_tokens" \
@@ -65,6 +67,8 @@ common_overrides=(
   --wandb.enabled "$wandb_enabled"
   --wandb.entity "$wandb_entity"
   --wandb.project "$wandb_project"
+  --data.train_files "$train_token_file"
+  --data.validation_files "$validation_token_file"
 )
 
 if [[ "${RUN_ALF:-1}" == "1" ]]; then

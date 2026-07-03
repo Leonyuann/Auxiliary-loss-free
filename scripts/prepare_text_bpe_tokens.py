@@ -157,14 +157,25 @@ def _flush_batch(tokenizer, batch: list[str], dst, max_tokens: int, written: int
 
     output_ids: list[int] = []
     batch_docs = 0
+    eos_id = None if eos is None else int(eos)
     for ids in encoded:
         if remaining <= 0:
             break
-        ids = ids if eos is None else [*ids, int(eos)]
-        if len(ids) > remaining:
-            ids = ids[:remaining]
-        output_ids.extend(ids)
-        remaining -= len(ids)
+
+        ids_len = len(ids)
+        document_tokens = ids_len + (1 if eos_id is not None else 0)
+        if document_tokens > remaining:
+            if remaining <= ids_len:
+                output_ids.extend(ids[:remaining])
+            else:
+                output_ids.extend(ids)
+                output_ids.append(eos_id)
+            remaining = 0
+        else:
+            output_ids.extend(ids)
+            if eos_id is not None:
+                output_ids.append(eos_id)
+            remaining -= document_tokens
         batch_docs += 1
 
     if not output_ids:
