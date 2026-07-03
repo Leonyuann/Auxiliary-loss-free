@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -108,7 +109,12 @@ def encode_text_file(*, tokenizer, input_path: Path, output_path: Path, max_toke
     docs = 0
     batch: list[str] = []
     with input_path.open("r", encoding="utf-8", errors="ignore") as src, tmp_path.open("wb") as dst:
-        progress = tqdm(total=max_tokens, desc=f"Encoding {input_path.name}", unit="tok")
+        progress = tqdm(
+            total=max_tokens,
+            desc=f"Encoding {input_path.name}",
+            unit="tok",
+            disable=not sys.stderr.isatty(),
+        )
         try:
             for line in src:
                 if written >= max_tokens:
@@ -128,21 +134,47 @@ def encode_text_file(*, tokenizer, input_path: Path, output_path: Path, max_toke
 
 
 def _flush_batch(tokenizer, batch: list[str], dst, max_tokens: int, written: int, docs: int, progress) -> tuple[int, int]:
+    """Encode and write one batch of documents as a single contiguous token array.
+
+    Args:
+        tokenizer: Tokenizer used to encode text documents.
+        batch: Text documents to encode.
+        dst: Binary output file handle.
+        max_tokens: Maximum number of tokens to write across the whole output.
+        written: Number of tokens already written.
+        docs: Number of documents already consumed.
+        progress: Progress bar updated once per flushed batch.
+
+    Returns:
+        Updated ``(written, docs)`` counters.
+    """
+
     encoded = tokenizer(batch, add_special_tokens=False)["input_ids"]
     eos = getattr(tokenizer, "eos_token_id", None)
+    remaining = max_tokens - written
+    if remaining <= 0:
+        return written, docs
+
+    output_ids: list[int] = []
+    batch_docs = 0
     for ids in encoded:
-        if eos is not None:
-            ids = list(ids) + [int(eos)]
-        remaining = max_tokens - written
         if remaining <= 0:
             break
+        ids = ids if eos is None else [*ids, int(eos)]
         if len(ids) > remaining:
             ids = ids[:remaining]
-        array = np.asarray(ids, dtype=np.int32)
-        array.tofile(dst)
-        written += int(array.size)
-        docs += 1
-        progress.update(int(array.size))
+        output_ids.extend(ids)
+        remaining -= len(ids)
+        batch_docs += 1
+
+    if not output_ids:
+        return written, docs
+
+    array = np.asarray(output_ids, dtype=np.int32)
+    array.tofile(dst)
+    written += int(array.size)
+    docs += batch_docs
+    progress.update(int(array.size))
     return written, docs
 
 
