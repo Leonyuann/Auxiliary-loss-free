@@ -15,7 +15,7 @@ else
   exit 1
 fi
 
-data_root="${DATA_ROOT:-/vepfs/ylq}"
+data_root="${DATA_ROOT:-/vepfs-mlp2/ylq}"
 owt_train="${OWT_TRAIN_TEXT:-/xts001/data/owt_train.txt}"
 owt_valid="${OWT_VALID_TEXT:-/xts001/data/owt_valid.txt}"
 owt_dir="${OWT_TOKEN_DIR:-$data_root/data}"

@@ -53,11 +53,23 @@ Verification:
 
 2026-07-03 - Optimize OWT token preparation and /vepfs defaults
 
-Improved scripts/prepare_text_bpe_tokens.py batch flushing by avoiding per-document list copies when appending EOS tokens. Moved OWT 104M experiment defaults and run scripts to use /vepfs/ylq/data for tokenized train/validation files and /vepfs/ylq/tokenizers/owt_bpe_32k for the tokenizer. Migrated the existing OWT BPE tokenizer from /xts001/alf/tokenizers to /vepfs/ylq/tokenizers.
+Improved scripts/prepare_text_bpe_tokens.py batch flushing by avoiding per-document list copies when appending EOS tokens. Moved OWT 104M experiment defaults and run scripts to use /vepfs-mlp2/ylq/data for tokenized train/validation files and /vepfs-mlp2/ylq/tokenizers/owt_bpe_32k for the tokenizer. Migrated the existing OWT BPE tokenizer from /xts001/alf/tokenizers to /vepfs-mlp2/ylq/tokenizers.
 
 Verification:
 - uv run pytest tests/test_prepare_text_bpe_tokens.py tests/test_data.py tests/test_config.py
 - bash -n scripts/run_owt_104m_baseline.sh
 - bash -n scripts/run_owt_104m_baselines.sh
-- uv run python -c 'from transformers import AutoTokenizer; tok=AutoTokenizer.from_pretrained("/vepfs/ylq/tokenizers/owt_bpe_32k"); print(len(tok), tok.eos_token_id)'
+- uv run python -c 'from transformers import AutoTokenizer; tok=AutoTokenizer.from_pretrained("/vepfs-mlp2/ylq/tokenizers/owt_bpe_32k"); print(len(tok), tok.eos_token_id)'
 - uv run python -c 'from pathlib import Path; from alf.config import load_experiment_config; [print(p.name, load_experiment_config(p).model.tokenizer_name_or_path, load_experiment_config(p).data.train_files, load_experiment_config(p).data.validation_files) for p in sorted(Path("experiments").glob("qwen3_moe_owt_104m_*.py"))]'
+
+2026-07-03 - Correct OWT storage root to /vepfs-mlp2
+
+Corrected the OWT 104M data and tokenizer defaults after confirming /vepfs is an overlay directory in this container and the true GPFS mount is /vepfs-mlp2/ylq. Migrated the OWT BPE tokenizer to /vepfs-mlp2/ylq/tokenizers/owt_bpe_32k and created /vepfs-mlp2/ylq/data for regenerated token files.
+
+Verification:
+- df -h / /vepfs /vepfs-mlp2/ylq /vepfs-mlp2/ylq/data
+- bash -n scripts/run_owt_104m_baseline.sh
+- bash -n scripts/run_owt_104m_baselines.sh
+- uv run python -c 'from pathlib import Path; from alf.config import load_experiment_config; [print(p.name, load_experiment_config(p).model.tokenizer_name_or_path, load_experiment_config(p).data.train_files, load_experiment_config(p).data.validation_files) for p in sorted(Path("experiments").glob("qwen3_moe_owt_104m_*.py"))]'
+- uv run python -c 'from transformers import AutoTokenizer; tok=AutoTokenizer.from_pretrained("/vepfs-mlp2/ylq/tokenizers/owt_bpe_32k"); print(len(tok), tok.eos_token_id)'
+- uv run pytest tests/test_config.py tests/test_prepare_text_bpe_tokens.py tests/test_data.py
