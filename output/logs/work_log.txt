@@ -139,3 +139,18 @@ Verification:
 - env PYTHONPATH=src uv run alf-train experiments/qwen3_moe_tiny_alf.py --model.torch_dtype bfloat16 --training.max_steps 1 --training.output_dir /tmp/alf-bf16-fp32-optim-smoke --training.save_every 1 --eval.eval_every 0 --wandb.enabled false
 - env PYTHONPATH=src uv run python -c 'from pathlib import Path; import torch; state = torch.load(Path("/tmp/alf-bf16-fp32-optim-smoke/latest/trainer_state.pt"), map_location="cpu"); first = next(value for value in state["optimizer"]["state"].values() if "exp_avg" in value); print({key: (value.dtype if torch.is_tensor(value) else type(value).__name__) for key, value in first.items()})'
 
+2026-07-05 - Downscale C4 MoE baselines to 300M
+
+- replaced the C4 500M-family experiment files with C4 300M-family ALF, ALF-EMA, and auxiliary-loss configs
+- changed the scaled MoE shape to hidden_size=512, intermediate_size=1280, 9 layers, 8 attention heads, 4 KV heads, and 16 experts, which instantiates at about 323.8M parameters
+- shortened default scaled training to 100k optimizer steps with batch_size=32 and gradient_accumulation_steps=2 while keeping a 65,536-token global batch on two GPUs
+- renamed the C4 baseline runner to scripts/run_c4_300m_baselines.sh and pointed it at the 300M configs/W&B group
+- updated README, project docs, PROJECT.md, and tests for the new 300M defaults
+
+Verification:
+- env PYTHONPATH=src uv run python parameter-count check reported 323.8M parameters for all three C4 300M configs
+- bash -n scripts/run_c4_300m_baselines.sh
+- env PYTHONPATH=src uv run python -m py_compile experiments/qwen3_moe_c4_300m_alf.py experiments/qwen3_moe_c4_300m_alf_ema.py experiments/qwen3_moe_c4_300m_aux_loss.py tests/test_train_ddp_helpers.py
+- env PYTHONPATH=src uv run pytest tests/test_train_ddp_helpers.py tests/test_config.py
+- env PYTHONPATH=src uv run pytest
+

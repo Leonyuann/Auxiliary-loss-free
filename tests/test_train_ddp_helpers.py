@@ -67,49 +67,50 @@ def test_c4_configs_disable_gradient_checkpointing_for_fair_comparison() -> None
     """C4 baselines should use the same checkpointing mode for throughput comparisons."""
 
     for path in [
-        "experiments/qwen3_moe_c4_500m_alf.py",
-        "experiments/qwen3_moe_c4_500m_alf_ema.py",
-        "experiments/qwen3_moe_c4_500m_aux_loss.py",
+        "experiments/qwen3_moe_c4_300m_alf.py",
+        "experiments/qwen3_moe_c4_300m_alf_ema.py",
+        "experiments/qwen3_moe_c4_300m_aux_loss.py",
     ]:
         config = load_experiment_config(path)
         assert config.training.gradient_checkpointing is False
 
 
-def test_c4_500m_configs_use_reasonable_moe_scale() -> None:
-    """C4 500M-family configs should use a 16-expert MoE and long C4 run."""
+def test_c4_300m_configs_use_reasonable_moe_scale() -> None:
+    """C4 300M-family configs should use a 16-expert MoE and shorter C4 run."""
 
     for path in [
-        "experiments/qwen3_moe_c4_500m_alf.py",
-        "experiments/qwen3_moe_c4_500m_alf_ema.py",
-        "experiments/qwen3_moe_c4_500m_aux_loss.py",
+        "experiments/qwen3_moe_c4_300m_alf.py",
+        "experiments/qwen3_moe_c4_300m_alf_ema.py",
+        "experiments/qwen3_moe_c4_300m_aux_loss.py",
     ]:
         config = load_experiment_config(path)
         assert config.model.hidden_size == 512
         assert config.model.intermediate_size == 1280
-        assert config.model.num_hidden_layers == 16
+        assert config.model.num_hidden_layers == 9
         assert config.model.num_attention_heads == 8
         assert config.model.num_key_value_heads == 4
         assert config.model.num_experts == 16
         assert config.model.num_experts_per_tok == 2
-        assert config.training.max_steps == 150_000
-        assert config.training.warmup_steps == 3000
+        assert config.training.max_steps == 100_000
+        assert config.training.warmup_steps == 2000
         assert config.training.max_grad_norm == 1.0
         assert config.training.optimizer_state_dtype == "float32"
-        assert config.training.save_every == 5000
-        assert config.eval.eval_every == 2000
+        assert config.training.save_every == 2500
+        assert config.eval.eval_every == 1000
+        assert config.eval.eval_batch_size == 32
 
 
 def test_c4_alf_bias_update_cadence_is_stable_for_accumulation() -> None:
     """C4 ALF configs should avoid overly frequent bias updates under accumulation."""
 
-    sign_config = load_experiment_config("experiments/qwen3_moe_c4_500m_alf.py")
-    ema_config = load_experiment_config("experiments/qwen3_moe_c4_500m_alf_ema.py")
+    sign_config = load_experiment_config("experiments/qwen3_moe_c4_300m_alf.py")
+    ema_config = load_experiment_config("experiments/qwen3_moe_c4_300m_alf_ema.py")
 
     assert sign_config.alf.bias_update_policy == "sign"
     assert sign_config.alf.bias_update_rate == 5e-4
     assert sign_config.alf.bias_update_end_rate == 1e-4
     assert sign_config.alf.bias_update_schedule == "linear"
-    assert sign_config.alf.bias_update_schedule_steps == 600_000
+    assert sign_config.alf.bias_update_schedule_steps == 200_000
     assert sign_config.alf.update_interval == sign_config.training.gradient_accumulation_steps
     assert sign_config.alf.warmup_steps == 4000
     assert sign_config.alf.bias_clip == 2.0
@@ -119,7 +120,7 @@ def test_c4_alf_bias_update_cadence_is_stable_for_accumulation() -> None:
     assert ema_config.alf.bias_update_end_rate == 1e-3
     assert ema_config.alf.bias_ema_beta == 0.9
     assert ema_config.alf.bias_update_schedule == "linear"
-    assert ema_config.alf.bias_update_schedule_steps == 600_000
+    assert ema_config.alf.bias_update_schedule_steps == 200_000
     assert ema_config.alf.update_interval == ema_config.training.gradient_accumulation_steps
     assert ema_config.alf.warmup_steps == 4000
     assert ema_config.alf.bias_clip == 2.0

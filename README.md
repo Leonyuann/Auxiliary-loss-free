@@ -46,13 +46,13 @@ Inspect router load and bias metrics:
 uv run alf-inspect-router --checkpoint outputs/qwen3_moe_tiny_alf/latest
 ```
 
-## C4 500M Experiments
+## C4 300M Experiments
 
-Prepare local C4 JSON.GZ shards into reusable int32 token files and run the 500M-family
+Prepare local C4 JSON.GZ shards into reusable int32 token files and run the 300M-family
 16-expert ALF, ALF-EMA, and auxiliary-loss baselines on two A100 GPUs:
 
 ```bash
-bash scripts/run_c4_500m_baselines.sh
+bash scripts/run_c4_300m_baselines.sh
 ```
 
 The script reads C4 from `/vepfs-mlp2/ylq/data/c4/en`, reuses
@@ -62,18 +62,18 @@ after the already processed C4 documents; use `C4_OVERWRITE=1` only when you wan
 to rebuild from the beginning. Set `RUN_ALF=0`, `RUN_EMA=0`, or `RUN_AUX=0` to skip
 individual runs, and `RUN_PREPARE=0` to skip data preparation entirely. By default,
 each preparation invocation targets 10B new train tokens, and the training configs
-use 150k steps with a global batch of 65,536 tokens on two GPUs.
+use 100k steps with a global batch of 65,536 tokens on two GPUs.
 
 All three C4 baseline configs keep `training.gradient_checkpointing` disabled for
 fair throughput comparisons; ALF and ALF-EMA also require it because bias and EMA
 updates are forward side effects. The scaled configs use `max_grad_norm=1.0`,
 FP32 AdamW optimizer state for BF16 parameters, and slower scheduled ALF bias
-updates to make the 150k-step run less brittle.
+updates to make the 100k-step run less brittle.
 
 Direct DDP launch example:
 
 ```bash
-uv run torchrun --standalone --nproc_per_node=2 -m alf.train experiments/qwen3_moe_c4_500m_alf.py
+uv run torchrun --standalone --nproc_per_node=2 -m alf.train experiments/qwen3_moe_c4_300m_alf.py
 ```
 
 ## W&B Observability

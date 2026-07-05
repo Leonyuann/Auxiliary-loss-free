@@ -149,7 +149,7 @@ Acceptance criteria:
 - W&B disabled mode does not import or call W&B.
 - W&B enabled mode logs stable scalar, table, heatmap, and artifact keys.
 
-## Sprint 6: C4 500M Scaling
+## Sprint 6: C4 300M Scaling
 
 Status: complete.
 
@@ -163,8 +163,8 @@ Deliverables:
 - Add dataloader worker, pin-memory, drop-last, and gradient checkpointing config fields.
 - Synchronize ALF router expert load across DDP ranks before bias updates.
 - Add C4 JSON.GZ to int32 token-file preparation.
-- Add 500M-family C4 ALF, ALF-EMA, and auxiliary-loss experiment configs with a 16-expert MoE shape.
-- Add a script for appending 10B-token C4 preparation increments and running the C4 500M baseline family.
+- Add 300M-family C4 ALF, ALF-EMA, and auxiliary-loss experiment configs with a 16-expert MoE shape.
+- Add a script for appending 10B-token C4 preparation increments and running the C4 300M baseline family.
 
 Acceptance criteria:
 
@@ -175,5 +175,5 @@ Acceptance criteria:
 
 ## Current Default Recommendation
 
-Run the C4 500M baseline family with `bash scripts/run_c4_500m_baselines.sh`, then
+Run the C4 300M baseline family with `bash scripts/run_c4_300m_baselines.sh`, then
 compare ALF sign, ALF EMA, and auxiliary-loss metrics in W&B and local JSONL logs.

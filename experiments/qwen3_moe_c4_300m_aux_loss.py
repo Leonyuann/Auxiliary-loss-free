@@ -1,16 +1,16 @@
-"""550M-parameter 16-expert Qwen3 MoE C4 traditional auxiliary-loss experiment."""
+"""324M-parameter 16-expert Qwen3 MoE C4 traditional auxiliary-loss experiment."""
 
 from alf.config import AlfConfig, DataConfig, EvalConfig, ExperimentConfig, ModelConfig, TrainingConfig, WandbConfig
 
 config = ExperimentConfig(
-    name="qwen3_moe_c4_500m_aux_loss",
+    name="qwen3_moe_c4_300m_aux_loss",
     model=ModelConfig(
         use_tiny_config=True,
         tokenizer_name_or_path="/vepfs-mlp2/ylq/tokenizers/owt_bpe_32k",
         vocab_size=32768,
         hidden_size=512,
         intermediate_size=1280,
-        num_hidden_layers=16,
+        num_hidden_layers=9,
         num_attention_heads=8,
         num_key_value_heads=4,
         num_experts=16,
@@ -24,21 +24,21 @@ config = ExperimentConfig(
         max_train_samples=None,
         max_validation_samples=32_768,
     ),
-    eval=EvalConfig(eval_every=2000, eval_batch_size=16, max_eval_samples=2048),
+    eval=EvalConfig(eval_every=1000, eval_batch_size=32, max_eval_samples=2048),
     training=TrainingConfig(
-        output_dir="outputs/qwen3_moe_c4_500m_aux_loss",
+        output_dir="outputs/qwen3_moe_c4_300m_aux_loss",
         seed=42,
-        max_steps=150_000,
-        batch_size=16,
-        gradient_accumulation_steps=4,
+        max_steps=100_000,
+        batch_size=32,
+        gradient_accumulation_steps=2,
         learning_rate=3e-4,
         weight_decay=0.1,
         scheduler_type="cosine",
-        warmup_steps=3000,
+        warmup_steps=2000,
         max_grad_norm=1.0,
         optimizer_state_dtype="float32",
         log_every=10,
-        save_every=5000,
+        save_every=2500,
         device="auto",
         num_workers=4,
         pin_memory=True,
@@ -55,7 +55,7 @@ config = ExperimentConfig(
         enabled=True,
         entity="liangqingyuann-huazhong-university-of-science-and-technology",
         project="Load-balance",
-        group="c4-500m",
-        tags=["aux-loss", "qwen3-moe", "c4", "500m-family", "550m", "16experts", "bpe32k", "ddp"],
+        group="c4-300m",
+        tags=["aux-loss", "qwen3-moe", "c4", "300m-family", "324m", "16experts", "bpe32k", "ddp"],
     ),
 )

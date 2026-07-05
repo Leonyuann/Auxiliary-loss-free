@@ -142,13 +142,13 @@ in the Python experiment file.
 ## Scaling Experiments
 
 The first scaled experiment family targets local C4 pretraining with an approximately
-550M-parameter, 16-expert Qwen3 MoE configuration. The C4 source is expected at
+324M-parameter, 16-expert Qwen3 MoE configuration. The C4 source is expected at
 `/vepfs-mlp2/ylq/data/c4/en` as gzipped JSONL shards with a `text` field.
 `scripts/prepare_c4_bpe_tokens.py` encodes train and validation shards into int32
 token files using `/vepfs-mlp2/ylq/tokenizers/owt_bpe_32k`, so training can reuse
 the memory-mapped token-file dataset path. The default C4 preparation budget is
 10B new train tokens per invocation; existing token files are appended using the
-metadata document count as the resume offset. This matches the 150k-step two-GPU
+metadata document count as the resume offset. This matches the 100k-step two-GPU
 training defaults at a 65,536-token global batch.
 
 Two-GPU runs use `torchrun` DDP. Rank zero owns console progress, local JSONL/W&B
@@ -162,7 +162,7 @@ to make speed and memory comparisons use the same mode. ALF variants also requir
 that setting because the router bias update is a forward side effect and checkpoint
 backward recomputation would advance the bias and EMA state a second time. Each
 scaled run clips gradients with `max_grad_norm=1.0` and keeps AdamW optimizer
-state in FP32 when model parameters are BF16; ALF sign and EMA use a four-forward
+state in FP32 when model parameters are BF16; ALF sign and EMA use a two-forward
 update interval, warmup, clipping, and linear decay for the bias update rate under
 gradient accumulation.
 
