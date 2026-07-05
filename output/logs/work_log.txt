@@ -96,3 +96,15 @@ Verification:
 
 Verification:
 - env PYTHONPATH=src uv run pytest
+
+2026-07-05 - C4 500M experiment scale and resumable token preparation
+
+- revised C4 500M-family experiment configs to a 16-expert MoE shape with about 550M parameters
+- increased default C4 training horizon to 150k steps and 10B train-token preparation increments
+- changed C4 token preparation to append new tokens from the previous metadata document offset
+- added metadata consistency checks for resumable appends and regression tests for the new behavior
+- updated README, docs, and project notes for the revised scale and append semantics
+
+Verification:
+- bash -n scripts/run_c4_500m_baselines.sh
+- env PYTHONPATH=src uv run pytest

@@ -1,4 +1,4 @@
-"""502M-parameter Qwen3 MoE C4 ALF sign bias-update experiment."""
+"""550M-parameter 16-expert Qwen3 MoE C4 ALF sign bias-update experiment."""
 
 from alf.config import AlfConfig, DataConfig, EvalConfig, ExperimentConfig, ModelConfig, TrainingConfig, WandbConfig
 
@@ -8,12 +8,12 @@ config = ExperimentConfig(
         use_tiny_config=True,
         tokenizer_name_or_path="/vepfs-mlp2/ylq/tokenizers/owt_bpe_32k",
         vocab_size=32768,
-        hidden_size=640,
-        intermediate_size=1792,
+        hidden_size=512,
+        intermediate_size=1280,
         num_hidden_layers=16,
-        num_attention_heads=10,
-        num_key_value_heads=5,
-        num_experts=8,
+        num_attention_heads=8,
+        num_key_value_heads=4,
+        num_experts=16,
         num_experts_per_tok=2,
         torch_dtype="bfloat16",
     ),
@@ -24,19 +24,19 @@ config = ExperimentConfig(
         max_train_samples=None,
         max_validation_samples=32_768,
     ),
-    eval=EvalConfig(eval_every=1000, eval_batch_size=16, max_eval_samples=2048),
+    eval=EvalConfig(eval_every=2000, eval_batch_size=16, max_eval_samples=2048),
     training=TrainingConfig(
         output_dir="outputs/qwen3_moe_c4_500m_alf",
         seed=42,
-        max_steps=20_000,
+        max_steps=150_000,
         batch_size=16,
         gradient_accumulation_steps=4,
         learning_rate=3e-4,
         weight_decay=0.1,
         scheduler_type="cosine",
-        warmup_steps=1000,
+        warmup_steps=3000,
         log_every=10,
-        save_every=1000,
+        save_every=5000,
         device="auto",
         num_workers=4,
         pin_memory=True,
@@ -60,6 +60,6 @@ config = ExperimentConfig(
         entity="liangqingyuann-huazhong-university-of-science-and-technology",
         project="Load-balance",
         group="c4-500m",
-        tags=["alf", "alf-sign", "qwen3-moe", "c4", "500m", "bpe32k", "ddp"],
+        tags=["alf", "alf-sign", "qwen3-moe", "c4", "500m-family", "550m", "16experts", "bpe32k", "ddp"],
     ),
 )

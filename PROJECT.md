@@ -163,8 +163,8 @@ Deliverables:
 - Add dataloader worker, pin-memory, drop-last, and gradient checkpointing config fields.
 - Synchronize ALF router expert load across DDP ranks before bias updates.
 - Add C4 JSON.GZ to int32 token-file preparation.
-- Add 500M C4 ALF, ALF-EMA, and auxiliary-loss experiment configs.
-- Add a script for preparing data and running the C4 500M baseline family.
+- Add 500M-family C4 ALF, ALF-EMA, and auxiliary-loss experiment configs with a 16-expert MoE shape.
+- Add a script for appending 10B-token C4 preparation increments and running the C4 500M baseline family.
 
 Acceptance criteria:
 

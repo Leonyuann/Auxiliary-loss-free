@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 
 def _load_prepare_module():
@@ -42,6 +43,7 @@ def _write_jsonl_gz(path: Path, records: list[dict[str, str]]) -> None:
         for record in records:
             file.write(json.dumps(record) + "\n")
 
+
 def test_encode_c4_split_writes_tokens_and_metadata(tmp_path: Path) -> None:
     """Encode C4 JSON.GZ text fields into int32 tokens with metadata."""
 
@@ -71,16 +73,16 @@ def test_encode_c4_split_writes_tokens_and_metadata(tmp_path: Path) -> None:
     assert sidecar["tokenizer"] == "test-tokenizer"
 
 
-def test_encode_c4_split_skips_existing_output_without_overwrite(tmp_path: Path) -> None:
-    """Existing token files should be reused unless overwrite is requested."""
+def test_encode_c4_split_appends_existing_output_without_overwrite(tmp_path: Path) -> None:
+    """Existing token files should append new tokens after processed documents."""
 
     module = _load_prepare_module()
     shard = tmp_path / "c4-validation.00000-of-00001.json.gz"
-    _write_jsonl_gz(shard, [{"text": "9"}])
+    _write_jsonl_gz(shard, [{"text": "1,2"}, {"text": "3"}, {"text": "4,5"}])
     output_path = tmp_path / "tokens.i32"
-    np.asarray([7], dtype=np.int32).tofile(output_path)
+    np.asarray([1, 2, 0], dtype=np.int32).tofile(output_path)
     output_path.with_suffix(".i32.metadata.json").write_text(
-        json.dumps({"output": str(output_path), "tokens": 1}),
+        json.dumps({"output": str(output_path), "tokens": 3, "documents": 1}),
         encoding="utf-8",
     )
 
@@ -88,11 +90,73 @@ def test_encode_c4_split_skips_existing_output_without_overwrite(tmp_path: Path)
         tokenizer=BatchTokenizer(),
         shards=[shard],
         output_path=output_path,
-        max_tokens=4,
+        max_tokens=3,
         batch_size=1,
         overwrite=False,
         split_name="validation",
     )
 
-    assert metadata["tokens"] == 1
-    assert np.fromfile(output_path, dtype=np.int32).tolist() == [7]
+    assert metadata["tokens"] == 6
+    assert metadata["documents"] == 3
+    assert metadata["last_run_tokens"] == 3
+    assert metadata["last_run_documents"] == 2
+    assert metadata["runs"][-1]["mode"] == "append"
+    assert np.fromfile(output_path, dtype=np.int32).tolist() == [1, 2, 0, 3, 0, 4]
+
+
+def test_encode_c4_split_requires_document_metadata_to_append(tmp_path: Path) -> None:
+    """Appending requires metadata that records how many C4 documents were consumed."""
+
+    module = _load_prepare_module()
+    shard = tmp_path / "c4-validation.00000-of-00001.json.gz"
+    _write_jsonl_gz(shard, [{"text": "1"}])
+    output_path = tmp_path / "tokens.i32"
+    np.asarray([1], dtype=np.int32).tofile(output_path)
+    output_path.with_suffix(".i32.metadata.json").write_text(
+        json.dumps({"output": str(output_path), "tokens": 1}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="document count"):
+        module.encode_c4_split(
+            tokenizer=BatchTokenizer(),
+            shards=[shard],
+            output_path=output_path,
+            max_tokens=1,
+            batch_size=1,
+            overwrite=False,
+            split_name="validation",
+        )
+
+
+def test_encode_c4_split_rejects_size_metadata_mismatch(tmp_path: Path) -> None:
+    """Appending should reject token files whose byte size disagrees with metadata."""
+
+    module = _load_prepare_module()
+    shard = tmp_path / "c4-validation.00000-of-00001.json.gz"
+    _write_jsonl_gz(shard, [{"text": "1"}])
+    output_path = tmp_path / "tokens.i32"
+    np.asarray([1], dtype=np.int32).tofile(output_path)
+    output_path.with_suffix(".i32.metadata.json").write_text(
+        json.dumps({"output": str(output_path), "tokens": 2, "documents": 1}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="size does not match"):
+        module.encode_c4_split(
+            tokenizer=BatchTokenizer(),
+            shards=[shard],
+            output_path=output_path,
+            max_tokens=1,
+            batch_size=1,
+            overwrite=False,
+            split_name="validation",
+        )
+
+
+def test_default_c4_train_token_budget_is_scaled() -> None:
+    """Default C4 preparation should target a multi-billion-token run."""
+
+    module = _load_prepare_module()
+
+    assert module.DEFAULT_TRAIN_TOKENS == 10_000_000_000

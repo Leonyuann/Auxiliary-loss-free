@@ -142,11 +142,14 @@ in the Python experiment file.
 ## Scaling Experiments
 
 The first scaled experiment family targets local C4 pretraining with an approximately
-502M-parameter Qwen3 MoE configuration. The C4 source is expected at
+550M-parameter, 16-expert Qwen3 MoE configuration. The C4 source is expected at
 `/vepfs-mlp2/ylq/data/c4/en` as gzipped JSONL shards with a `text` field.
 `scripts/prepare_c4_bpe_tokens.py` encodes train and validation shards into int32
 token files using `/vepfs-mlp2/ylq/tokenizers/owt_bpe_32k`, so training can reuse
-the memory-mapped token-file dataset path.
+the memory-mapped token-file dataset path. The default C4 preparation budget is
+10B new train tokens per invocation; existing token files are appended using the
+metadata document count as the resume offset. This matches the 150k-step two-GPU
+training defaults at a 65,536-token global batch.
 
 Two-GPU runs use `torchrun` DDP. Rank zero owns console progress, local JSONL/W&B
 logging, validation, and checkpoint writes. During DDP training, ALF routers reduce

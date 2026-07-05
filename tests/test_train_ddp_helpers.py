@@ -63,3 +63,25 @@ def test_c4_alf_configs_disable_gradient_checkpointing() -> None:
         config = load_experiment_config(path)
         assert config.alf.enabled is True
         assert config.training.gradient_checkpointing is False
+
+
+def test_c4_500m_configs_use_reasonable_moe_scale() -> None:
+    """C4 500M-family configs should use a 16-expert MoE and long C4 run."""
+
+    for path in [
+        "experiments/qwen3_moe_c4_500m_alf.py",
+        "experiments/qwen3_moe_c4_500m_alf_ema.py",
+        "experiments/qwen3_moe_c4_500m_aux_loss.py",
+    ]:
+        config = load_experiment_config(path)
+        assert config.model.hidden_size == 512
+        assert config.model.intermediate_size == 1280
+        assert config.model.num_hidden_layers == 16
+        assert config.model.num_attention_heads == 8
+        assert config.model.num_key_value_heads == 4
+        assert config.model.num_experts == 16
+        assert config.model.num_experts_per_tok == 2
+        assert config.training.max_steps == 150_000
+        assert config.training.warmup_steps == 3000
+        assert config.training.save_every == 5000
+        assert config.eval.eval_every == 2000

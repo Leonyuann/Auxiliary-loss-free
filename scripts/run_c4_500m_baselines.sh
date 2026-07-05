@@ -24,8 +24,8 @@ nproc_per_node="${NPROC_PER_NODE:-2}"
 block_size="${BLOCK_SIZE:-512}"
 batch_size="${BATCH_SIZE:-16}"
 grad_accum="${GRADIENT_ACCUMULATION_STEPS:-4}"
-max_steps="${MAX_STEPS:-20000}"
-train_tokens="${C4_TRAIN_TOKENS:-$((max_steps * batch_size * grad_accum * block_size * nproc_per_node))}"
+max_steps="${MAX_STEPS:-150000}"
+train_tokens="${C4_TRAIN_TOKENS:-10000000000}"
 validation_tokens="${C4_VALIDATION_TOKENS:-16777216}"
 
 wandb_enabled="${WANDB_ENABLED:-true}"
@@ -39,7 +39,15 @@ if [[ "${C4_OVERWRITE:-0}" == "1" ]]; then
 fi
 
 if [[ "${RUN_PREPARE:-1}" == "1" ]]; then
-  "${python_cmd[@]}" scripts/prepare_c4_bpe_tokens.py     --c4-dir "$c4_dir"     --tokenizer-dir "$tokenizer_dir"     --train-output "$train_token_file"     --validation-output "$validation_token_file"     --max-train-tokens "$train_tokens"     --max-validation-tokens "$validation_tokens"     --encode-batch-size "${ENCODE_BATCH_SIZE:-8192}"     "${prepare_args[@]}"
+  "${python_cmd[@]}" scripts/prepare_c4_bpe_tokens.py \
+    --c4-dir "$c4_dir" \
+    --tokenizer-dir "$tokenizer_dir" \
+    --train-output "$train_token_file" \
+    --validation-output "$validation_token_file" \
+    --max-train-tokens "$train_tokens" \
+    --max-validation-tokens "$validation_tokens" \
+    --encode-batch-size "${ENCODE_BATCH_SIZE:-8192}" \
+    "${prepare_args[@]}"
 fi
 
 common_overrides=(
@@ -62,7 +70,10 @@ if [[ "${RUN_ALF:-1}" == "1" ]]; then
 fi
 
 if [[ "${RUN_EMA:-1}" == "1" ]]; then
-  "${train_cmd[@]}" "${torchrun_args[@]}" experiments/qwen3_moe_c4_500m_alf_ema.py     "${common_overrides[@]}"     --alf.bias_ema_beta "${ALF_EMA_BETA:-0.5}"     --alf.bias_update_rate "${ALF_EMA_RATE:-1e-1}"
+  "${train_cmd[@]}" "${torchrun_args[@]}" experiments/qwen3_moe_c4_500m_alf_ema.py \
+    "${common_overrides[@]}" \
+    --alf.bias_ema_beta "${ALF_EMA_BETA:-0.5}" \
+    --alf.bias_update_rate "${ALF_EMA_RATE:-1e-1}"
 fi
 
 if [[ "${RUN_AUX:-1}" == "1" ]]; then
