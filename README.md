@@ -64,9 +64,10 @@ individual runs, and `RUN_PREPARE=0` to skip data preparation entirely. By defau
 each preparation invocation targets 10B new train tokens, and the training configs
 use 150k steps with a global batch of 65,536 tokens on two GPUs.
 
-ALF and ALF-EMA configs keep `training.gradient_checkpointing` disabled because
-ALF bias and EMA updates are forward side effects. The auxiliary-loss baseline may
-use gradient checkpointing.
+All three C4 baseline configs keep `training.gradient_checkpointing` disabled for
+fair throughput comparisons; ALF and ALF-EMA also require it because bias and EMA
+updates are forward side effects. The scaled configs use `max_grad_norm=1.0` and
+slower scheduled ALF bias updates to make the 150k-step run less brittle.
 
 Direct DDP launch example:
 

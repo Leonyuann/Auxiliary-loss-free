@@ -83,6 +83,8 @@ class TrainingConfig:
         learning_rate: AdamW learning rate.
         weight_decay: AdamW weight decay.
         warmup_steps: Linear warmup steps.
+        max_grad_norm: Optional maximum gradient norm for clipping before each
+            optimizer step. Use ``None`` or a non-positive value to disable.
         log_every: Step interval for console and metrics logging.
         save_every: Step interval for checkpoint saving.
         resume_from: Optional checkpoint directory to resume from.
@@ -105,6 +107,7 @@ class TrainingConfig:
     learning_rate: float = 3e-4
     weight_decay: float = 0.0
     warmup_steps: int = 0
+    max_grad_norm: float | None = 1.0
     scheduler_type: str = "constant"
     log_every: int = 1
     save_every: int = 5

@@ -33,6 +33,8 @@ def test_apply_dotted_overrides() -> None:
             "--training.pin_memory",
             "true",
             "--training.gradient_checkpointing=true",
+            "--training.max_grad_norm",
+            "0.5",
             "--training.ddp_backend",
             "gloo",
         ],
@@ -47,4 +49,5 @@ def test_apply_dotted_overrides() -> None:
     assert config.training.num_workers == 2
     assert config.training.pin_memory is True
     assert config.training.gradient_checkpointing is True
+    assert config.training.max_grad_norm == 0.5
     assert config.training.ddp_backend == "gloo"

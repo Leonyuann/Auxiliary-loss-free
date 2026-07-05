@@ -184,7 +184,7 @@ def train(config_path: str | Path, overrides: list[str] | None = None) -> Path:
                 bias_update_events += update_events
 
             tokens = _sync_step_statistics(loss_totals, tokens, distributed, device)
-            grad_norm = _gradient_norm(model)
+            grad_norm = _clip_or_measure_gradient_norm(model, config.training.max_grad_norm)
             optimizer.step()
             scheduler.step()
             step += 1
@@ -592,6 +592,25 @@ def _gradient_norm(model: torch.nn.Module) -> float:
         param_norm = parameter.grad.detach().float().norm(2).item()
         total += param_norm * param_norm
     return float(total**0.5)
+
+
+def _clip_or_measure_gradient_norm(model: torch.nn.Module, max_grad_norm: float | None) -> float:
+    """Clip gradients when configured and return the pre-step norm.
+
+    Args:
+        model: Model whose gradients should be clipped or measured.
+        max_grad_norm: Maximum L2 gradient norm. ``None`` or non-positive values
+            disable clipping and only measure the current gradient norm.
+
+    Returns:
+        Gradient norm before clipping when clipping is enabled, otherwise the
+        measured current gradient norm.
+    """
+
+    if max_grad_norm is None or max_grad_norm <= 0:
+        return _gradient_norm(model)
+    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=float(max_grad_norm))
+    return float(grad_norm.detach().float().item())
 
 
 def _should_evaluate(step: int, eval_every: int, max_steps: int) -> bool:
