@@ -86,3 +86,13 @@ Verification:
 - env PYTHONPATH=src uv run pytest
 - env PYTHONPATH=src uv run alf-train experiments/qwen3_moe_tiny_alf.py --training.max_steps 1 --training.output_dir /tmp/alf-c4-500m-smoke --training.save_every 1 --wandb.enabled false
 - env PYTHONPATH=src uv run torchrun --standalone --nproc_per_node=2 -m alf.train experiments/qwen3_moe_tiny_alf.py --training.max_steps 1 --training.batch_size 1 --training.output_dir /tmp/alf-c4-500m-ddp-smoke --training.save_every 1 --wandb.enabled false
+
+2026-07-05 - ALF checkpointing and DDP aux-load metric fixes
+
+- disabled gradient checkpointing for C4 500M ALF and ALF-EMA configs
+- added training validation to reject ALF with gradient checkpointing overrides
+- synchronized plain Qwen3 router load tracking across DDP ranks for aux-loss metrics
+- documented the ALF gradient-checkpointing constraint and added regression tests
+
+Verification:
+- env PYTHONPATH=src uv run pytest

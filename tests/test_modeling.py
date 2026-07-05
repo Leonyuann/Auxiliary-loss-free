@@ -14,7 +14,12 @@ from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeTopKRouter
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from alf.metrics import collect_auxiliary_loss_free_router_metrics
-from alf.modeling import apply_aux_loss_free_router, iter_auxiliary_loss_free_routers, replace_qwen3_moe_routers
+from alf.modeling import (
+    _record_plain_router_load_hook,
+    apply_aux_loss_free_router,
+    iter_auxiliary_loss_free_routers,
+    replace_qwen3_moe_routers,
+)
 from alf.router import Qwen3MoeAuxiliaryLossFreeTopKRouter
 
 
@@ -187,3 +192,91 @@ def test_collect_auxiliary_loss_free_router_metrics_aggregates_serializable_valu
     assert metrics["aggregate_load"]["counts"] == [2, 1, 1]
     assert metrics["aggregate_load"]["max_min_load_ratio"] == 2.0
     assert len(metrics["aggregate_bias"]["values"]) == 6
+
+
+def test_plain_router_load_hook_all_reduces_during_ddp_training(monkeypatch) -> None:
+    """Aux-loss baseline load metrics should use global DDP counts during training."""
+
+    class FakeDist:
+        """Minimal torch.distributed test double for all-reduce behavior."""
+
+        class ReduceOp:
+            """Reduction operation names used by the hook."""
+
+            SUM = "sum"
+
+        def __init__(self) -> None:
+            """Initialize the fake distributed backend."""
+
+            self.calls = 0
+
+        def is_available(self) -> bool:
+            """Return whether distributed collectives are available."""
+
+            return True
+
+        def is_initialized(self) -> bool:
+            """Return whether a process group is initialized."""
+
+            return True
+
+        def all_reduce(self, tensor: torch.Tensor, op: str) -> None:
+            """Simulate a sum all-reduce by doubling the local counts."""
+
+            assert op == self.ReduceOp.SUM
+            self.calls += 1
+            tensor.mul_(2)
+
+    fake_dist = FakeDist()
+    monkeypatch.setattr("alf.modeling.dist", fake_dist)
+    module = nn.Module()
+    module.num_experts = 3
+    module.register_buffer("last_expert_load", torch.zeros(3, dtype=torch.long))
+    module.register_buffer("last_load_fraction", torch.zeros(3, dtype=torch.float32))
+    module.train()
+
+    router_indices = torch.tensor([[0, 1], [1, 2]])
+    _record_plain_router_load_hook(module, (), (torch.empty(0), torch.empty(0), router_indices))
+
+    assert fake_dist.calls == 1
+    assert module.last_expert_load.tolist() == [2, 4, 2]
+    assert torch.allclose(module.last_load_fraction, torch.tensor([0.25, 0.5, 0.25]))
+
+
+def test_plain_router_load_hook_skips_all_reduce_during_eval(monkeypatch) -> None:
+    """Rank-zero-only eval should not enter a distributed collective."""
+
+    class FakeDist:
+        """Distributed test double that fails if all-reduce is called."""
+
+        class ReduceOp:
+            """Reduction operation names used by the hook."""
+
+            SUM = "sum"
+
+        def is_available(self) -> bool:
+            """Return whether distributed collectives are available."""
+
+            return True
+
+        def is_initialized(self) -> bool:
+            """Return whether a process group is initialized."""
+
+            return True
+
+        def all_reduce(self, tensor: torch.Tensor, op: str) -> None:
+            """Fail if eval tries to synchronize router metrics."""
+
+            raise AssertionError("eval hook should not all_reduce")
+
+    monkeypatch.setattr("alf.modeling.dist", FakeDist())
+    module = nn.Module()
+    module.num_experts = 2
+    module.register_buffer("last_expert_load", torch.zeros(2, dtype=torch.long))
+    module.register_buffer("last_load_fraction", torch.zeros(2, dtype=torch.float32))
+    module.eval()
+
+    router_indices = torch.tensor([[0, 1]])
+    _record_plain_router_load_hook(module, (), (torch.empty(0), torch.empty(0), router_indices))
+
+    assert module.last_expert_load.tolist() == [1, 1]

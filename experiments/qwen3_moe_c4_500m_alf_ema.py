@@ -41,7 +41,7 @@ config = ExperimentConfig(
         num_workers=4,
         pin_memory=True,
         drop_last=True,
-        gradient_checkpointing=True,
+        gradient_checkpointing=False,
         ddp_backend="nccl",
         ddp_find_unused_parameters=False,
     ),

@@ -77,6 +77,7 @@ def train(config_path: str | Path, overrides: list[str] | None = None) -> Path:
     """
 
     config = load_experiment_config(config_path, overrides)
+    _validate_training_config(config)
     distributed = _init_distributed(config.training.ddp_backend)
     _set_seed(config.training.seed)
 
@@ -319,6 +320,24 @@ def main() -> None:
 
     config_path, overrides = parse_config_args()
     train(config_path, overrides)
+
+
+def _validate_training_config(config: Any) -> None:
+    """Validate training options that affect experiment semantics.
+
+    Args:
+        config: Loaded experiment config.
+
+    Raises:
+        ValueError: If a training option would make router side effects invalid.
+    """
+
+    if config.alf.enabled and config.training.gradient_checkpointing:
+        msg = (
+            "ALF routing updates expert bias as a forward side effect, so "
+            "training.gradient_checkpointing must be false when alf.enabled is true."
+        )
+        raise ValueError(msg)
 
 
 def _init_distributed(backend: str | None = None) -> DistributedState:

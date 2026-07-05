@@ -60,6 +60,10 @@ The script reads C4 from `/vepfs-mlp2/ylq/data/c4/en`, reuses
 `/vepfs-mlp2/ylq/data/c4/`. Set `RUN_ALF=0`, `RUN_EMA=0`, or `RUN_AUX=0` to skip
 individual runs. Set `RUN_PREPARE=0` after token files already exist.
 
+ALF and ALF-EMA configs keep `training.gradient_checkpointing` disabled because
+ALF bias and EMA updates are forward side effects. The auxiliary-loss baseline may
+use gradient checkpointing.
+
 Direct DDP launch example:
 
 ```bash

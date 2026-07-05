@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 from safetensors.torch import load_file as load_safetensors_file
 
@@ -408,7 +409,10 @@ def _record_plain_router_load_hook(
         return
     with torch.no_grad():
         expert_load = torch.bincount(router_indices.reshape(-1), minlength=int(module.num_experts))
-        module.last_expert_load.copy_(expert_load.to(device=module.last_expert_load.device, dtype=torch.long))
+        expert_load = expert_load.to(device=module.last_expert_load.device, dtype=torch.long)
+        if module.training and dist.is_available() and dist.is_initialized():
+            dist.all_reduce(expert_load, op=dist.ReduceOp.SUM)
+        module.last_expert_load.copy_(expert_load)
         total_assignments = int(expert_load.sum().item())
         if total_assignments == 0:
             module.last_load_fraction.zero_()

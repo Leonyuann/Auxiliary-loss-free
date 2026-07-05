@@ -153,6 +153,10 @@ logging, validation, and checkpoint writes. During DDP training, ALF routers red
 expert load counts across ranks before updating bias so sign, EMA, and other bias
 policies use global utilization.
 
+Gradient checkpointing must stay disabled for ALF variants because the router bias
+update is a forward side effect and checkpoint backward recomputation would advance
+the bias and EMA state a second time. Auxiliary-loss baseline runs can enable it.
+
 ## Expected Commands
 
 The target user-facing commands are:
