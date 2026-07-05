@@ -3,6 +3,8 @@
 from pathlib import Path
 import json
 import shutil
+import subprocess
+import sys
 
 import torch
 from safetensors.torch import load_file
@@ -188,6 +190,34 @@ def test_validation_files_are_used_for_eval_metrics(tmp_path: Path) -> None:
     eval_record = next(record for record in records if "eval/tokens" in record)
 
     assert eval_record["eval/tokens"] == 32
+
+
+def test_train_module_entrypoint_runs_main(tmp_path: Path) -> None:
+    """Running python -m alf.train should execute the training entry point."""
+
+    output_dir = tmp_path / "module-entry"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "alf.train",
+            "experiments/qwen3_moe_tiny_alf.py",
+            "--training.max_steps",
+            "0",
+            "--training.output_dir",
+            str(output_dir),
+            "--wandb.enabled",
+            "false",
+        ],
+        check=False,
+        cwd=Path(__file__).resolve().parents[1],
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (output_dir / "config.json").exists()
+
 
 def test_cosine_scheduler_decays_after_warmup() -> None:
     """Cosine scheduler should warm up and then anneal toward zero."""

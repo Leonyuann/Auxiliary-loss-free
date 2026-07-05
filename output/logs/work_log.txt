@@ -154,3 +154,14 @@ Verification:
 - env PYTHONPATH=src uv run pytest tests/test_train_ddp_helpers.py tests/test_config.py
 - env PYTHONPATH=src uv run pytest
 
+2026-07-05 - Fix torchrun module entrypoint for C4 scripts
+
+- diagnosed scripts/run_c4_300m_baselines.sh empty-running under torchrun -m alf.train because alf.train defined main() but did not call it for module execution
+- added the standard if __name__ == "__main__" guard to src/alf/train.py
+- added a subprocess regression test that verifies python -m alf.train writes training config output
+
+Verification:
+- env PYTHONPATH=src uv run python -m py_compile src/alf/train.py tests/test_train_inspect.py
+- env PYTHONPATH=src uv run pytest tests/test_train_inspect.py::test_train_module_entrypoint_runs_main tests/test_train_ddp_helpers.py
+- env PYTHONPATH=src uv run pytest
+

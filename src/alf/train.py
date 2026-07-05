@@ -977,3 +977,8 @@ def _load_model_state_dict(checkpoint_dir: Path) -> dict[str, torch.Tensor]:
     if pytorch_path.exists():
         return torch.load(pytorch_path, map_location="cpu")
     raise FileNotFoundError(f"No model weights found in {checkpoint_dir}")
+
+
+if __name__ == "__main__":
+    main()
+
