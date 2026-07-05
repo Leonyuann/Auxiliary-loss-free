@@ -35,6 +35,8 @@ def test_apply_dotted_overrides() -> None:
             "--training.gradient_checkpointing=true",
             "--training.max_grad_norm",
             "0.5",
+            "--training.optimizer_state_dtype",
+            "parameter",
             "--training.ddp_backend",
             "gloo",
         ],
@@ -50,4 +52,5 @@ def test_apply_dotted_overrides() -> None:
     assert config.training.pin_memory is True
     assert config.training.gradient_checkpointing is True
     assert config.training.max_grad_norm == 0.5
+    assert config.training.optimizer_state_dtype == "parameter"
     assert config.training.ddp_backend == "gloo"

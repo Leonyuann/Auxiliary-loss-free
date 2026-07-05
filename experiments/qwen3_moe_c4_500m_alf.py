@@ -36,6 +36,7 @@ config = ExperimentConfig(
         scheduler_type="cosine",
         warmup_steps=3000,
         max_grad_norm=1.0,
+        optimizer_state_dtype="float32",
         log_every=10,
         save_every=5000,
         device="auto",

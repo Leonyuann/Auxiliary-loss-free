@@ -6,7 +6,9 @@ import pytest
 
 from alf.config import AlfConfig, ExperimentConfig, TrainingConfig, load_experiment_config
 from alf.train import (
+    FP32AdamW,
     DistributedState,
+    _build_optimizer,
     _build_train_sampler,
     _clip_or_measure_gradient_norm,
     _gradient_norm,
@@ -92,6 +94,7 @@ def test_c4_500m_configs_use_reasonable_moe_scale() -> None:
         assert config.training.max_steps == 150_000
         assert config.training.warmup_steps == 3000
         assert config.training.max_grad_norm == 1.0
+        assert config.training.optimizer_state_dtype == "float32"
         assert config.training.save_every == 5000
         assert config.eval.eval_every == 2000
 
@@ -144,3 +147,63 @@ def test_clip_or_measure_gradient_norm_can_be_disabled() -> None:
 
     assert grad_norm == pytest.approx(5.0)
     assert _gradient_norm(model) == pytest.approx(5.0)
+
+
+def test_build_optimizer_keeps_bfloat16_adamw_state_in_float32() -> None:
+    """BF16 model parameters should use FP32 AdamW master and moment state."""
+
+    model = torch.nn.Linear(2, 1, bias=False).to(dtype=torch.bfloat16)
+    optimizer = _build_optimizer(
+        model,
+        learning_rate=0.1,
+        weight_decay=0.0,
+        optimizer_state_dtype="float32",
+    )
+    model.weight.grad = torch.ones_like(model.weight)
+
+    optimizer.step()
+
+    assert isinstance(optimizer, FP32AdamW)
+    state = optimizer.state[model.weight]
+    assert model.weight.dtype == torch.bfloat16
+    assert state["master_param"].dtype == torch.float32
+    assert state["exp_avg"].dtype == torch.float32
+    assert state["exp_avg_sq"].dtype == torch.float32
+
+
+def test_build_optimizer_can_use_parameter_dtype_state() -> None:
+    """The opt-out mode should preserve PyTorch's native AdamW behavior."""
+
+    model = torch.nn.Linear(2, 1, bias=False).to(dtype=torch.bfloat16)
+    optimizer = _build_optimizer(
+        model,
+        learning_rate=0.1,
+        weight_decay=0.0,
+        optimizer_state_dtype="parameter",
+    )
+    model.weight.grad = torch.ones_like(model.weight)
+
+    optimizer.step()
+
+    assert isinstance(optimizer, torch.optim.AdamW)
+    assert not isinstance(optimizer, FP32AdamW)
+    assert optimizer.state[model.weight]["exp_avg"].dtype == torch.bfloat16
+
+
+def test_fp32_adamw_loads_legacy_low_precision_state_as_float32() -> None:
+    """Legacy native AdamW checkpoints should resume with FP32 optimizer state."""
+
+    model = torch.nn.Linear(2, 1, bias=False).to(dtype=torch.bfloat16)
+    native_optimizer = torch.optim.AdamW(model.parameters(), lr=0.1)
+    model.weight.grad = torch.ones_like(model.weight)
+    native_optimizer.step()
+    native_state = native_optimizer.state_dict()
+
+    replacement = FP32AdamW(model.parameters(), lr=0.1)
+    replacement.load_state_dict(native_state)
+
+    state = replacement.state[model.weight]
+    assert state["master_param"].dtype == torch.float32
+    assert state["exp_avg"].dtype == torch.float32
+    assert state["exp_avg_sq"].dtype == torch.float32
+

@@ -123,3 +123,19 @@ Verification:
 - env PYTHONPATH=src uv run pytest tests/test_config.py tests/test_train_ddp_helpers.py tests/test_modeling.py
 - env PYTHONPATH=src uv run pytest
 
+2026-07-05 - Keep BF16 AdamW optimizer state in FP32
+
+- confirmed PyTorch AdamW creates BF16 moment state when model parameters are BF16
+- added FP32AdamW with FP32 master parameters and FP32 first/second moments for low-precision model parameters
+- added training.optimizer_state_dtype with float32 as the default and parameter as an opt-out to native PyTorch behavior
+- configured the C4 550M-family baselines to explicitly use FP32 optimizer state
+- documented the BF16 optimizer-state behavior and added regression tests, including legacy native AdamW state loading
+
+Verification:
+- env PYTHONPATH=src uv run python -m py_compile src/alf/config.py src/alf/train.py tests/test_train_ddp_helpers.py tests/test_config.py experiments/qwen3_moe_c4_500m_alf.py experiments/qwen3_moe_c4_500m_alf_ema.py experiments/qwen3_moe_c4_500m_aux_loss.py
+- bash -n scripts/run_c4_500m_baselines.sh
+- env PYTHONPATH=src uv run pytest tests/test_config.py tests/test_train_ddp_helpers.py tests/test_train_inspect.py
+- env PYTHONPATH=src uv run pytest
+- env PYTHONPATH=src uv run alf-train experiments/qwen3_moe_tiny_alf.py --model.torch_dtype bfloat16 --training.max_steps 1 --training.output_dir /tmp/alf-bf16-fp32-optim-smoke --training.save_every 1 --eval.eval_every 0 --wandb.enabled false
+- env PYTHONPATH=src uv run python -c 'from pathlib import Path; import torch; state = torch.load(Path("/tmp/alf-bf16-fp32-optim-smoke/latest/trainer_state.pt"), map_location="cpu"); first = next(value for value in state["optimizer"]["state"].values() if "exp_avg" in value); print({key: (value.dtype if torch.is_tensor(value) else type(value).__name__) for key, value in first.items()})'
+

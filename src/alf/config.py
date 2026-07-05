@@ -85,6 +85,9 @@ class TrainingConfig:
         warmup_steps: Linear warmup steps.
         max_grad_norm: Optional maximum gradient norm for clipping before each
             optimizer step. Use ``None`` or a non-positive value to disable.
+        optimizer_state_dtype: Optimizer state precision. ``float32`` keeps AdamW
+            moment estimates in FP32 for low-precision model parameters;
+            ``parameter`` uses PyTorch's parameter-matching state dtype.
         log_every: Step interval for console and metrics logging.
         save_every: Step interval for checkpoint saving.
         resume_from: Optional checkpoint directory to resume from.
@@ -108,6 +111,7 @@ class TrainingConfig:
     weight_decay: float = 0.0
     warmup_steps: int = 0
     max_grad_norm: float | None = 1.0
+    optimizer_state_dtype: str = "float32"
     scheduler_type: str = "constant"
     log_every: int = 1
     save_every: int = 5

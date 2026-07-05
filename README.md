@@ -66,8 +66,9 @@ use 150k steps with a global batch of 65,536 tokens on two GPUs.
 
 All three C4 baseline configs keep `training.gradient_checkpointing` disabled for
 fair throughput comparisons; ALF and ALF-EMA also require it because bias and EMA
-updates are forward side effects. The scaled configs use `max_grad_norm=1.0` and
-slower scheduled ALF bias updates to make the 150k-step run less brittle.
+updates are forward side effects. The scaled configs use `max_grad_norm=1.0`,
+FP32 AdamW optimizer state for BF16 parameters, and slower scheduled ALF bias
+updates to make the 150k-step run less brittle.
 
 Direct DDP launch example:
 

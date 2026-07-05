@@ -65,6 +65,157 @@ class DistributedState:
     initialized_by_train: bool = False
 
 
+class FP32AdamW(torch.optim.Optimizer):
+    """AdamW with FP32 master parameters and moment state.
+
+    This optimizer is intended for low-precision model parameters such as BF16.
+    Gradients are converted to FP32 for the AdamW update, the FP32 master copy is
+    updated, and the resulting value is copied back to the model parameter dtype.
+
+    Attributes:
+        param_groups: Optimizer parameter groups inherited from PyTorch.
+        state: Per-parameter optimizer state, including FP32 master and moments.
+
+    Methods:
+        step: Apply one AdamW update.
+        load_state_dict: Restore and normalize optimizer state precision.
+    """
+
+    def __init__(
+        self,
+        params: Any,
+        *,
+        lr: float = 1e-3,
+        betas: tuple[float, float] = (0.9, 0.999),
+        eps: float = 1e-8,
+        weight_decay: float = 0.0,
+    ) -> None:
+        """Initialize the FP32-state AdamW optimizer.
+
+        Args:
+            params: Iterable of parameters or parameter groups.
+            lr: Learning rate.
+            betas: Adam first- and second-moment coefficients.
+            eps: Numerical stability term.
+            weight_decay: Decoupled weight decay coefficient.
+
+        Raises:
+            ValueError: If hyperparameters are outside valid ranges.
+        """
+
+        if lr < 0.0:
+            raise ValueError(f"Invalid learning rate: {lr}")
+        if eps < 0.0:
+            raise ValueError(f"Invalid epsilon value: {eps}")
+        if not 0.0 <= betas[0] < 1.0:
+            raise ValueError(f"Invalid beta parameter at index 0: {betas[0]}")
+        if not 0.0 <= betas[1] < 1.0:
+            raise ValueError(f"Invalid beta parameter at index 1: {betas[1]}")
+        if weight_decay < 0.0:
+            raise ValueError(f"Invalid weight_decay value: {weight_decay}")
+        defaults = {"lr": lr, "betas": betas, "eps": eps, "weight_decay": weight_decay}
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure: Any | None = None) -> Any:
+        """Perform a single AdamW optimization step.
+
+        Args:
+            closure: Optional closure that reevaluates the model and returns loss.
+
+        Returns:
+            The closure loss when a closure is provided, otherwise ``None``.
+
+        Raises:
+            RuntimeError: If a sparse gradient is encountered.
+        """
+
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        for group in self.param_groups:
+            beta1, beta2 = group["betas"]
+            lr = group["lr"]
+            weight_decay = group["weight_decay"]
+            eps = group["eps"]
+            for parameter in group["params"]:
+                if parameter.grad is None:
+                    continue
+                if parameter.grad.is_sparse:
+                    raise RuntimeError("FP32AdamW does not support sparse gradients.")
+                state = self.state[parameter]
+                if len(state) == 0:
+                    self._init_state(parameter, state)
+                master_param = state["master_param"]
+                exp_avg = state["exp_avg"]
+                exp_avg_sq = state["exp_avg_sq"]
+                state["step"] += 1
+
+                grad = parameter.grad.detach().to(device=master_param.device, dtype=torch.float32)
+                if weight_decay != 0.0:
+                    master_param.mul_(1.0 - lr * weight_decay)
+                exp_avg.mul_(beta1).add_(grad, alpha=1.0 - beta1)
+                exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1.0 - beta2)
+
+                step = int(state["step"])
+                bias_correction1 = 1.0 - beta1**step
+                bias_correction2 = 1.0 - beta2**step
+                step_size = lr / bias_correction1
+                denom = exp_avg_sq.sqrt().div_(bias_correction2**0.5).add_(eps)
+                master_param.addcdiv_(exp_avg, denom, value=-step_size)
+                parameter.copy_(master_param.to(device=parameter.device, dtype=parameter.dtype))
+        return loss
+
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
+        """Load optimizer state and keep master/moment tensors in FP32.
+
+        Args:
+            state_dict: Serialized optimizer state.
+        """
+
+        super().load_state_dict(state_dict)
+        for group in self.param_groups:
+            for parameter in group["params"]:
+                state = self.state[parameter]
+                if len(state) == 0:
+                    continue
+                if "step" in state and torch.is_tensor(state["step"]):
+                    state["step"] = int(state["step"].item())
+                elif "step" in state:
+                    state["step"] = int(state["step"])
+                else:
+                    state["step"] = 0
+                if "master_param" not in state:
+                    state["master_param"] = parameter.detach().float().clone()
+                else:
+                    state["master_param"] = state["master_param"].to(
+                        device=parameter.device,
+                        dtype=torch.float32,
+                    )
+                for key in ("exp_avg", "exp_avg_sq"):
+                    if key in state:
+                        state[key] = state[key].to(device=parameter.device, dtype=torch.float32)
+                    else:
+                        state[key] = torch.zeros_like(state["master_param"], dtype=torch.float32)
+                parameter.data.copy_(state["master_param"].to(device=parameter.device, dtype=parameter.dtype))
+
+    def _init_state(self, parameter: torch.nn.Parameter, state: dict[str, Any]) -> None:
+        """Create FP32 master and moment state for one parameter.
+
+        Args:
+            parameter: Model parameter being optimized.
+            state: Mutable optimizer state dictionary for the parameter.
+        """
+
+        master_param = parameter.detach().float().clone()
+        state["step"] = 0
+        state["master_param"] = master_param
+        state["exp_avg"] = torch.zeros_like(master_param, dtype=torch.float32)
+        state["exp_avg_sq"] = torch.zeros_like(master_param, dtype=torch.float32)
+
+
 def train(config_path: str | Path, overrides: list[str] | None = None) -> Path:
     """Train one causal language model experiment.
 
@@ -121,10 +272,11 @@ def train(config_path: str | Path, overrides: list[str] | None = None) -> Path:
         drop_last=config.training.drop_last,
     )
 
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=config.training.learning_rate,
+    optimizer = _build_optimizer(
+        model,
+        learning_rate=config.training.learning_rate,
         weight_decay=config.training.weight_decay,
+        optimizer_state_dtype=config.training.optimizer_state_dtype,
     )
     scheduler = _build_scheduler(
         optimizer,
@@ -592,6 +744,43 @@ def _gradient_norm(model: torch.nn.Module) -> float:
         param_norm = parameter.grad.detach().float().norm(2).item()
         total += param_norm * param_norm
     return float(total**0.5)
+
+
+def _build_optimizer(
+    model: torch.nn.Module,
+    *,
+    learning_rate: float,
+    weight_decay: float,
+    optimizer_state_dtype: str = "float32",
+) -> torch.optim.Optimizer:
+    """Build AdamW with FP32 state for low-precision parameters when requested.
+
+    Args:
+        model: Model whose parameters will be optimized.
+        learning_rate: AdamW learning rate.
+        weight_decay: AdamW weight decay.
+        optimizer_state_dtype: ``float32`` for FP32 optimizer state or
+            ``parameter`` to use PyTorch's default state dtype.
+
+    Returns:
+        Configured optimizer.
+
+    Raises:
+        ValueError: If the optimizer state dtype mode is unsupported.
+    """
+
+    normalized_dtype = optimizer_state_dtype.lower().replace("-", "_")
+    if normalized_dtype in {"parameter", "param", "model"}:
+        return torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    if normalized_dtype not in {"float32", "fp32"}:
+        raise ValueError(f"Unsupported optimizer_state_dtype: {optimizer_state_dtype!r}")
+    has_low_precision_parameter = any(
+        parameter.requires_grad and parameter.dtype in {torch.bfloat16, torch.float16}
+        for parameter in model.parameters()
+    )
+    if has_low_precision_parameter:
+        return FP32AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    return torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
 
 def _clip_or_measure_gradient_norm(model: torch.nn.Module, max_grad_norm: float | None) -> float:
