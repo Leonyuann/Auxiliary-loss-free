@@ -46,6 +46,26 @@ Inspect router load and bias metrics:
 uv run alf-inspect-router --checkpoint outputs/qwen3_moe_tiny_alf/latest
 ```
 
+## C4 500M Experiments
+
+Prepare local C4 JSON.GZ shards into reusable int32 token files and run the 500M
+ALF, ALF-EMA, and auxiliary-loss baselines on two A100 GPUs:
+
+```bash
+bash scripts/run_c4_500m_baselines.sh
+```
+
+The script reads C4 from `/vepfs-mlp2/ylq/data/c4/en`, reuses
+`/vepfs-mlp2/ylq/tokenizers/owt_bpe_32k`, and writes default token files under
+`/vepfs-mlp2/ylq/data/c4/`. Set `RUN_ALF=0`, `RUN_EMA=0`, or `RUN_AUX=0` to skip
+individual runs. Set `RUN_PREPARE=0` after token files already exist.
+
+Direct DDP launch example:
+
+```bash
+uv run torchrun --standalone --nproc_per_node=2 -m alf.train experiments/qwen3_moe_c4_500m_alf.py
+```
+
 ## W&B Observability
 
 Training runs log both local JSONL metrics and W&B metrics. By default, W&B is enabled
@@ -88,6 +108,9 @@ Supported ALF bias update policies:
 
 - `proportional`: update bias by the proportional load error.
 - `sign`: update bias by fixed-size steps from the load error direction.
+- `ema`: update bias from an exponential moving average of load error.
+- `accumulated_sign`: accumulate load error over an interval, then apply a sign step.
+- `balanced_topk_sign`: update the most imbalanced positive and negative experts.
 
 Bias update rate scheduling defaults to `--alf.bias_update_schedule constant`. Use
 `linear` with `--alf.bias_update_schedule_steps` to decay from

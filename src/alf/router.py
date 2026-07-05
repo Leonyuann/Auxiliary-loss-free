@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import torch
+import torch.distributed as dist
 from torch import Tensor, nn
 from torch.nn import functional as F
 
@@ -278,7 +279,10 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
 
         with torch.no_grad():
             expert_load = torch.bincount(router_indices.reshape(-1), minlength=self.num_experts)
-            self.last_expert_load.copy_(expert_load.to(device=self.last_expert_load.device, dtype=torch.long))
+            expert_load = expert_load.to(device=self.last_expert_load.device, dtype=torch.long)
+            if self.training and dist.is_available() and dist.is_initialized():
+                dist.all_reduce(expert_load, op=dist.ReduceOp.SUM)
+            self.last_expert_load.copy_(expert_load)
             total_assignments = int(expert_load.sum().item())
             if total_assignments == 0:
                 self.last_load_fraction.zero_()

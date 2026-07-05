@@ -28,6 +28,13 @@ def test_apply_dotted_overrides() -> None:
             "10",
             "--alf.bias_update_end_rate=1e-5",
             "--data.train_files=tests/fixtures/tiny_corpus.txt",
+            "--training.num_workers",
+            "2",
+            "--training.pin_memory",
+            "true",
+            "--training.gradient_checkpointing=true",
+            "--training.ddp_backend",
+            "gloo",
         ],
     )
 
@@ -37,3 +44,7 @@ def test_apply_dotted_overrides() -> None:
     assert config.alf.bias_update_schedule_steps == 10
     assert config.alf.bias_update_end_rate == 1e-5
     assert config.data.train_files == ["tests/fixtures/tiny_corpus.txt"]
+    assert config.training.num_workers == 2
+    assert config.training.pin_memory is True
+    assert config.training.gradient_checkpointing is True
+    assert config.training.ddp_backend == "gloo"

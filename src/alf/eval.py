@@ -53,6 +53,9 @@ def evaluate_model(
         batch_size=config.eval.eval_batch_size,
         shuffle=False,
         collate_fn=causal_lm_collate,
+        num_workers=config.training.num_workers,
+        pin_memory=config.training.pin_memory,
+        drop_last=False,
     )
 
     was_training = model.training

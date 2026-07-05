@@ -73,3 +73,16 @@ Verification:
 - uv run python -c 'from pathlib import Path; from alf.config import load_experiment_config; [print(p.name, load_experiment_config(p).model.tokenizer_name_or_path, load_experiment_config(p).data.train_files, load_experiment_config(p).data.validation_files) for p in sorted(Path("experiments").glob("qwen3_moe_owt_104m_*.py"))]'
 - uv run python -c 'from transformers import AutoTokenizer; tok=AutoTokenizer.from_pretrained("/vepfs-mlp2/ylq/tokenizers/owt_bpe_32k"); print(len(tok), tok.eos_token_id)'
 - uv run pytest tests/test_config.py tests/test_prepare_text_bpe_tokens.py tests/test_data.py
+
+2026-07-05 - C4 500M DDP scaling support
+
+- added torchrun/DDP-aware training with rank-zero logging, eval, checkpointing, and DDP no_sync accumulation
+- synchronized ALF router expert load across distributed ranks before bias updates
+- added C4 JSON.GZ token preparation into reusable int32 token files
+- added 500M C4 ALF sign, ALF EMA, and auxiliary-loss experiment configs plus runner script
+- documented C4/DDP workflow and added tests for C4 preprocessing and DDP helpers
+
+Verification:
+- env PYTHONPATH=src uv run pytest
+- env PYTHONPATH=src uv run alf-train experiments/qwen3_moe_tiny_alf.py --training.max_steps 1 --training.output_dir /tmp/alf-c4-500m-smoke --training.save_every 1 --wandb.enabled false
+- env PYTHONPATH=src uv run torchrun --standalone --nproc_per_node=2 -m alf.train experiments/qwen3_moe_tiny_alf.py --training.max_steps 1 --training.batch_size 1 --training.output_dir /tmp/alf-c4-500m-ddp-smoke --training.save_every 1 --wandb.enabled false

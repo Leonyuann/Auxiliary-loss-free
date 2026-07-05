@@ -52,7 +52,7 @@ Out of scope for the first baseline:
 
 - Training official large Qwen3 MoE checkpoints such as 30B-A3B.
 - SFT, RLHF, or serving/inference optimization.
-- Distributed expert parallelism beyond what the initial backend already supports.
+- Distributed expert parallelism beyond data-parallel DDP training.
 - Full custom Qwen3 model implementation.
 
 ## Technical Direction
@@ -121,7 +121,8 @@ The main dataclass groups are:
 - `ModelConfig`: Qwen3 MoE model name, local checkpoint path, or tiny model dimensions.
 - `DataConfig`: training text files, tokenizer, block size, and packing behavior.
 - `TrainingConfig`: batch size, learning rate, training steps, checkpoint path, dtype,
-  gradient accumulation, linear warmup steps, and logging interval.
+  gradient accumulation, linear warmup steps, logging interval, dataloader workers,
+  gradient checkpointing, and DDP options.
 - `AlfConfig`: whether auxiliary-loss-free routing is enabled, bias initialization,
   bias update rate, bias update policy, bias update rate schedule, and whether to
   disable the original router auxiliary loss.
@@ -137,6 +138,20 @@ uv run alf-train experiments/qwen3_moe_tiny_alf.py --training.max_steps 20
 
 No core training options should be hard-coded in scripts when they can be represented
 in the Python experiment file.
+
+## Scaling Experiments
+
+The first scaled experiment family targets local C4 pretraining with an approximately
+502M-parameter Qwen3 MoE configuration. The C4 source is expected at
+`/vepfs-mlp2/ylq/data/c4/en` as gzipped JSONL shards with a `text` field.
+`scripts/prepare_c4_bpe_tokens.py` encodes train and validation shards into int32
+token files using `/vepfs-mlp2/ylq/tokenizers/owt_bpe_32k`, so training can reuse
+the memory-mapped token-file dataset path.
+
+Two-GPU runs use `torchrun` DDP. Rank zero owns console progress, local JSONL/W&B
+logging, validation, and checkpoint writes. During DDP training, ALF routers reduce
+expert load counts across ranks before updating bias so sign, EMA, and other bias
+policies use global utilization.
 
 ## Expected Commands
 

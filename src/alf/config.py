@@ -87,6 +87,14 @@ class TrainingConfig:
         save_every: Step interval for checkpoint saving.
         resume_from: Optional checkpoint directory to resume from.
         device: Device string. Use ``auto`` to prefer CUDA when available.
+        num_workers: Number of dataloader worker processes.
+        pin_memory: Whether dataloaders should pin CPU memory.
+        drop_last: Whether dataloaders and distributed samplers should drop the
+            final incomplete batch.
+        gradient_checkpointing: Whether to enable model gradient checkpointing.
+        ddp_backend: Optional torch.distributed backend override.
+        ddp_find_unused_parameters: Whether DDP should search for unused
+            parameters during backward.
     """
 
     output_dir: str = "outputs/qwen3_moe_tiny_alf"
@@ -102,6 +110,12 @@ class TrainingConfig:
     save_every: int = 5
     resume_from: str | None = None
     device: str = "auto"
+    num_workers: int = 0
+    pin_memory: bool = False
+    drop_last: bool = False
+    gradient_checkpointing: bool = False
+    ddp_backend: str | None = None
+    ddp_find_unused_parameters: bool = False
 
 
 @dataclass

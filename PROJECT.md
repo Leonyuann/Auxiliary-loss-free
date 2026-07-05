@@ -149,8 +149,31 @@ Acceptance criteria:
 - W&B disabled mode does not import or call W&B.
 - W&B enabled mode logs stable scalar, table, heatmap, and artifact keys.
 
+## Sprint 6: C4 500M Scaling
+
+Status: complete.
+
+Passes: true.
+
+Goal: support the first scaled research experiments on two A100 GPUs with C4 data.
+
+Deliverables:
+
+- Add DDP-aware training with rank-zero logging, validation, and checkpoint writes.
+- Add dataloader worker, pin-memory, drop-last, and gradient checkpointing config fields.
+- Synchronize ALF router expert load across DDP ranks before bias updates.
+- Add C4 JSON.GZ to int32 token-file preparation.
+- Add 500M C4 ALF, ALF-EMA, and auxiliary-loss experiment configs.
+- Add a script for preparing data and running the C4 500M baseline family.
+
+Acceptance criteria:
+
+- `uv run pytest` passes.
+- Existing tiny and OWT configs remain compatible with single-process training.
+- C4 token preparation can encode local gzipped JSONL shards and write metadata.
+- `torchrun --standalone --nproc_per_node=2 -m alf.train ...` launches DDP training.
+
 ## Current Default Recommendation
 
-All planned observability infrastructure is implemented. The next recommended planning
-step is to define the first real research experiment: dataset choice, compute budget,
-model scale, and which ALF policy variants to compare beyond the tiny smoke baseline.
+Run the C4 500M baseline family with `bash scripts/run_c4_500m_baselines.sh`, then
+compare ALF sign, ALF EMA, and auxiliary-loss metrics in W&B and local JSONL logs.
