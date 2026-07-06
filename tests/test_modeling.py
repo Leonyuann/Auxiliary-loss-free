@@ -13,10 +13,12 @@ from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeTopKRouter
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from alf.config import AlfConfig, ModelConfig
 from alf.metrics import collect_auxiliary_loss_free_router_metrics
 from alf.modeling import (
     _record_plain_router_load_hook,
     apply_aux_loss_free_router,
+    build_model_and_tokenizer,
     iter_auxiliary_loss_free_routers,
     replace_qwen3_moe_routers,
 )
@@ -192,6 +194,30 @@ def test_collect_auxiliary_loss_free_router_metrics_aggregates_serializable_valu
     assert metrics["aggregate_load"]["counts"] == [2, 1, 1]
     assert metrics["aggregate_load"]["max_min_load_ratio"] == 2.0
     assert len(metrics["aggregate_bias"]["values"]) == 6
+
+
+def test_build_model_uses_configured_router_aux_loss_for_aux_baseline() -> None:
+    """Aux-loss baseline should read router aux-loss coefficient from ModelConfig."""
+
+    model, _ = build_model_and_tokenizer(
+        ModelConfig(router_aux_loss_coef=0.02),
+        AlfConfig(enabled=False, disable_router_aux_loss=False),
+    )
+
+    assert model.router_aux_loss_coef == 0.02
+    assert model.config.router_aux_loss_coef == 0.02
+
+
+def test_build_model_disables_configured_router_aux_loss_for_alf() -> None:
+    """ALF should still disable configured router aux loss when requested."""
+
+    model, _ = build_model_and_tokenizer(
+        ModelConfig(router_aux_loss_coef=0.02),
+        AlfConfig(enabled=True, disable_router_aux_loss=True),
+    )
+
+    assert model.router_aux_loss_coef == 0.0
+    assert model.config.router_aux_loss_coef == 0.0
 
 
 def test_plain_router_load_hook_all_reduces_during_ddp_training(monkeypatch) -> None:

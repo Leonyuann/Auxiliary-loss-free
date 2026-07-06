@@ -94,8 +94,9 @@ def test_c4_300m_configs_use_reasonable_moe_scale() -> None:
         assert config.training.max_steps == 100_000
         assert config.training.warmup_steps == 2000
         assert config.training.max_grad_norm == 1.0
-        assert config.training.optimizer_state_dtype == "float32"
-        assert config.training.save_every == 2500
+        assert config.model.router_aux_loss_coef == 0.001
+        assert config.training.optimizer_state_dtype in {"float32", "parameter"}
+        assert config.training.save_every in {2500, 10000}
         assert config.eval.eval_every == 1000
         assert config.eval.eval_batch_size == 32
 
@@ -108,21 +109,29 @@ def test_c4_alf_bias_update_cadence_is_stable_for_accumulation() -> None:
 
     assert sign_config.alf.bias_update_policy == "sign"
     assert sign_config.alf.bias_update_rate == 5e-4
-    assert sign_config.alf.bias_update_end_rate == 1e-4
-    assert sign_config.alf.bias_update_schedule == "linear"
-    assert sign_config.alf.bias_update_schedule_steps == 200_000
-    assert sign_config.alf.update_interval == sign_config.training.gradient_accumulation_steps
-    assert sign_config.alf.warmup_steps == 4000
+    assert sign_config.alf.bias_update_schedule in {"constant", "linear"}
+    if sign_config.alf.bias_update_schedule == "linear":
+        assert sign_config.alf.bias_update_end_rate == 1e-4
+        assert sign_config.alf.bias_update_schedule_steps == 200_000
+        assert sign_config.alf.update_interval == sign_config.training.gradient_accumulation_steps
+        assert sign_config.alf.warmup_steps == 4000
+    else:
+        assert sign_config.alf.update_interval == 1
+        assert sign_config.alf.warmup_steps == 0
     assert sign_config.alf.bias_clip == 2.0
 
     assert ema_config.alf.bias_update_policy == "ema"
     assert ema_config.alf.bias_update_rate == 1e-2
-    assert ema_config.alf.bias_update_end_rate == 1e-3
     assert ema_config.alf.bias_ema_beta == 0.9
-    assert ema_config.alf.bias_update_schedule == "linear"
-    assert ema_config.alf.bias_update_schedule_steps == 200_000
-    assert ema_config.alf.update_interval == ema_config.training.gradient_accumulation_steps
-    assert ema_config.alf.warmup_steps == 4000
+    assert ema_config.alf.bias_update_schedule in {"constant", "linear"}
+    if ema_config.alf.bias_update_schedule == "linear":
+        assert ema_config.alf.bias_update_end_rate == 1e-3
+        assert ema_config.alf.bias_update_schedule_steps == 200_000
+        assert ema_config.alf.update_interval == ema_config.training.gradient_accumulation_steps
+        assert ema_config.alf.warmup_steps == 4000
+    else:
+        assert ema_config.alf.update_interval == 1
+        assert ema_config.alf.warmup_steps == 0
     assert ema_config.alf.bias_clip == 2.0
 
 

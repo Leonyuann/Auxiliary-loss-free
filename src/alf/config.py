@@ -30,6 +30,8 @@ class ModelConfig:
         num_key_value_heads: Number of key/value attention heads for tiny config.
         num_experts: Number of routed experts for tiny config.
         num_experts_per_tok: Number of experts selected per token.
+        router_aux_loss_coef: Router auxiliary-loss coefficient used by the
+            original Qwen3 MoE auxiliary-loss path.
         torch_dtype: Training dtype name, such as ``float32`` or ``bfloat16``.
         trust_remote_code: Whether Hugging Face loading may use remote code.
     """
@@ -45,6 +47,7 @@ class ModelConfig:
     num_key_value_heads: int = 2
     num_experts: int = 4
     num_experts_per_tok: int = 2
+    router_aux_loss_coef: float = 0.001
     torch_dtype: str = "float32"
     trust_remote_code: bool = False
 

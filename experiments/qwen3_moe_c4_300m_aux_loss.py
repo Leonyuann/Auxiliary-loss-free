@@ -15,6 +15,7 @@ config = ExperimentConfig(
         num_key_value_heads=4,
         num_experts=16,
         num_experts_per_tok=2,
+        router_aux_loss_coef=0.001,
         torch_dtype="bfloat16",
     ),
     data=DataConfig(

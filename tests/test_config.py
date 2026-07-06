@@ -22,6 +22,8 @@ def test_apply_dotted_overrides() -> None:
             "--training.max_steps",
             "2",
             "--alf.enabled=false",
+            "--model.router_aux_loss_coef",
+            "0.02",
             "--alf.bias_update_schedule",
             "linear",
             "--alf.bias_update_schedule_steps",
@@ -44,6 +46,7 @@ def test_apply_dotted_overrides() -> None:
 
     assert config.training.max_steps == 2
     assert config.alf.enabled is False
+    assert config.model.router_aux_loss_coef == 0.02
     assert config.alf.bias_update_schedule == "linear"
     assert config.alf.bias_update_schedule_steps == 10
     assert config.alf.bias_update_end_rate == 1e-5

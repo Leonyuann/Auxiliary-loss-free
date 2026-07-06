@@ -165,3 +165,9 @@ Verification:
 - env PYTHONPATH=src uv run pytest tests/test_train_inspect.py::test_train_module_entrypoint_runs_main tests/test_train_ddp_helpers.py
 - env PYTHONPATH=src uv run pytest
 
+
+## 2026-07-06 - Configurable router auxiliary loss coefficient
+- Added `ModelConfig.router_aux_loss_coef` so experiment files and CLI overrides can control the Qwen3 MoE router auxiliary-loss weight.
+- Wired model construction to propagate the configured coefficient to both model and HF config objects while preserving ALF aux-loss disabling semantics.
+- Added config/modeling coverage for CLI overrides, aux-loss baseline coefficient use, and ALF zeroing behavior.
+- Verification: `env PYTHONPATH=src uv run pytest` passed with 58 tests.

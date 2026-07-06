@@ -147,6 +147,27 @@ def disable_router_aux_loss(model: nn.Module) -> bool:
     return disabled
 
 
+def set_router_aux_loss_coef(model: nn.Module, coefficient: float) -> bool:
+    """Set the Hugging Face router auxiliary-loss coefficient when present.
+
+    Args:
+        model: Model whose auxiliary-loss coefficient should be configured.
+        coefficient: Router auxiliary-loss coefficient.
+
+    Returns:
+        `True` when at least one attribute was updated.
+    """
+
+    updated = False
+    if hasattr(model, "router_aux_loss_coef"):
+        setattr(model, "router_aux_loss_coef", float(coefficient))
+        updated = True
+    if hasattr(model, "config") and hasattr(model.config, "router_aux_loss_coef"):
+        setattr(model.config, "router_aux_loss_coef", float(coefficient))
+        updated = True
+    return updated
+
+
 def replace_qwen3_moe_routers(
     model: nn.Module,
     *,
@@ -315,7 +336,7 @@ def build_model_and_tokenizer(model_config: ModelConfig, alf_config: AlfConfig) 
             num_experts=model_config.num_experts,
             num_experts_per_tok=model_config.num_experts_per_tok,
             output_router_logits=not alf_config.enabled,
-            router_aux_loss_coef=0.0 if alf_config.enabled else 0.001,
+            router_aux_loss_coef=float(model_config.router_aux_loss_coef),
             max_position_embeddings=512,
         )
         model = Qwen3MoeForCausalLM(config)
@@ -336,6 +357,7 @@ def build_model_and_tokenizer(model_config: ModelConfig, alf_config: AlfConfig) 
             trust_remote_code=model_config.trust_remote_code,
         )
 
+    set_router_aux_loss_coef(model, model_config.router_aux_loss_coef)
     if alf_config.enabled:
         apply_aux_loss_free_router(model, alf_config)
     else:
@@ -530,6 +552,7 @@ __all__ = [
     "attach_router_load_tracking",
     "build_model_and_tokenizer",
     "disable_router_aux_loss",
+    "set_router_aux_loss_coef",
     "is_qwen3_moe_router",
     "iter_auxiliary_loss_free_routers",
     "load_model_for_inspection",
