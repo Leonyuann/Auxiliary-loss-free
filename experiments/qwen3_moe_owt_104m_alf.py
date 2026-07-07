@@ -21,7 +21,7 @@ config = ExperimentConfig(
         train_files=["/vepfs-mlp2/ylq/data/train_1310m_bpe32k_tokens.i32"],
         validation_files=["/vepfs-mlp2/ylq/data/validation_16m_bpe32k_tokens.i32"],
         block_size=512,
-        max_train_samples=2_560_000,
+        max_train_samples=None,
         max_validation_samples=32_768,
     ),
     eval=EvalConfig(eval_every=500, eval_batch_size=16, max_eval_samples=2048),
@@ -41,7 +41,7 @@ config = ExperimentConfig(
     ),
     alf=AlfConfig(
         enabled=True,
-        bias_update_rate=1e-4,
+        bias_update_rate=1e-3,
         bias_update_policy="sign",
         bias_ema_beta=0.9,
         bias_init=0.0,
