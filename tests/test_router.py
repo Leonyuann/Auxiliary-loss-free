@@ -91,10 +91,16 @@ def test_bias_updates_only_during_training_and_tracks_load_direction_without_def
     router.train()
     router(hidden_states)
     assert torch.allclose(router.expert_bias, torch.tensor([0.0, 0.1]))
+    assert int(router.training_steps.item()) == 0
+    assert int(router.bias_update_steps.item()) == 0
+
+    assert router.update_expert_bias_from_accumulated_load() is False
+    assert torch.allclose(router.expert_bias, torch.tensor([0.0, 0.1]))
     assert int(router.training_steps.item()) == 1
     assert int(router.bias_update_steps.item()) == 0
 
     router(hidden_states)
+    assert router.update_expert_bias_from_accumulated_load() is True
     assert torch.allclose(router.expert_bias, torch.tensor([0.25, -0.15]))
     assert router.expert_bias.requires_grad is False
     assert int(router.training_steps.item()) == 2
@@ -120,8 +126,37 @@ def test_sign_bias_update_policy_uses_fixed_step_direction() -> None:
     router.train()
     router(torch.tensor([[1.0, 0.0], [1.0, 0.0], [1.0, 0.0], [1.0, 0.0]]))
 
+    assert torch.allclose(router.expert_bias, torch.tensor([0.0, 0.1]))
+    assert router.update_expert_bias_from_accumulated_load() is True
     assert torch.allclose(router.expert_bias, torch.tensor([0.1, 0.0]))
     assert torch.allclose(router.last_bias_delta, torch.tensor([0.1, -0.1]))
+
+
+def test_bias_update_uses_accumulated_microbatch_load_once_per_step() -> None:
+    """Bias updates should use accumulated load across micro batches."""
+
+    router = Qwen3MoeAuxiliaryLossFreeTopKRouter(
+        hidden_size=2,
+        num_experts=2,
+        num_experts_per_tok=1,
+        norm_topk_prob=False,
+        expert_bias_update_rate=0.1,
+        expert_bias_update_policy="sign",
+    )
+    with torch.no_grad():
+        router.weight.copy_(torch.eye(2))
+
+    router.train()
+    router(torch.tensor([[1.0, 0.0], [1.0, 0.0]]))
+    router(torch.tensor([[0.0, 1.0], [0.0, 1.0]]))
+
+    assert torch.allclose(router.expert_bias, torch.zeros(2))
+    assert router.accumulated_expert_load.tolist() == [2, 2]
+    assert router.update_expert_bias_from_accumulated_load() is True
+    assert torch.allclose(router.last_bias_delta, torch.zeros(2))
+    assert torch.allclose(router.expert_bias, torch.zeros(2))
+    assert int(router.bias_update_steps.item()) == 1
+    assert router.accumulated_expert_load.tolist() == [0, 0]
 
 
 def test_balanced_topk_sign_updates_equal_positive_and_negative_extremes() -> None:
@@ -175,7 +210,9 @@ def test_control_buffers_stay_float32_after_bfloat16_cast() -> None:
 
     router.train()
     router(torch.ones(4, 2, dtype=torch.bfloat16))
+    assert torch.allclose(router.expert_bias, torch.tensor([0.5, 0.6]))
 
+    assert router.update_expert_bias_from_accumulated_load() is True
     assert torch.allclose(router.last_bias_delta, torch.tensor([1e-3, -1e-3]))
     assert torch.allclose(router.expert_bias, torch.tensor([0.501, 0.599]))
 
@@ -223,6 +260,8 @@ def test_ema_bias_update_policy_tracks_smoothed_error() -> None:
     router.train()
     router(torch.ones(4, 2))
 
+    assert torch.allclose(router.load_error_ema, torch.zeros(2))
+    assert router.update_expert_bias_from_accumulated_load() is True
     assert torch.allclose(router.load_error_ema, torch.tensor([0.25, -0.25]))
     assert torch.allclose(router.last_bias_delta, torch.tensor([0.25, -0.25]))
 
@@ -245,11 +284,13 @@ def test_accumulated_sign_updates_only_on_interval() -> None:
 
     router.train()
     router(torch.ones(4, 2))
+    assert router.update_expert_bias_from_accumulated_load() is False
     assert torch.allclose(router.last_bias_delta, torch.zeros(2))
     assert int(router.bias_update_steps.item()) == 0
     assert torch.allclose(router.load_error_accumulator, torch.tensor([0.5, -0.5]))
 
     router(torch.ones(4, 2))
+    assert router.update_expert_bias_from_accumulated_load() is True
     assert torch.allclose(router.last_bias_delta, torch.tensor([0.1, -0.1]))
     assert int(router.bias_update_steps.item()) == 1
     assert torch.allclose(router.load_error_accumulator, torch.zeros(2))

@@ -127,6 +127,34 @@ def iter_auxiliary_loss_free_routers(
             yield qualified_name, child_module
 
 
+def reset_auxiliary_loss_free_router_loads(model: nn.Module) -> None:
+    """Reset ALF router load accumulators before a new optimizer step.
+
+    Args:
+        model: Model that may contain auxiliary-loss-free routers.
+    """
+
+    for _, router in iter_auxiliary_loss_free_routers(model):
+        router.reset_expert_load_accumulator()
+
+
+def update_auxiliary_loss_free_router_biases(model: nn.Module) -> int:
+    """Update all ALF router biases once from accumulated optimizer-step load.
+
+    Args:
+        model: Model that may contain auxiliary-loss-free routers.
+
+    Returns:
+        Number of router bias update events that occurred.
+    """
+
+    update_events = 0
+    for _, router in iter_auxiliary_loss_free_routers(model):
+        if router.update_expert_bias_from_accumulated_load():
+            update_events += 1
+    return update_events
+
+
 def disable_router_aux_loss(model: nn.Module) -> bool:
     """Disable the Hugging Face router auxiliary-loss coefficient when present.
 
@@ -193,16 +221,16 @@ def replace_qwen3_moe_routers(
         expert_bias_init: Initial scalar value copied into all expert bias entries.
         expert_bias_update_rate: Update magnitude used for load-balancing bias steps.
         expert_bias_update_policy: Bias update policy.
-        expert_bias_update_interval: Number of training forwards between updates.
+        expert_bias_update_interval: Number of optimizer steps between updates.
         expert_bias_ema_beta: EMA coefficient for the ``ema`` bias update policy.
         expert_bias_update_topk: Number of positive-error and negative-error experts
             updated by the ``balanced_topk_sign`` policy.
         expert_bias_update_schedule: Schedule used for bias update rates.
-        expert_bias_update_schedule_steps: Number of post-warmup training forwards
+        expert_bias_update_schedule_steps: Number of post-warmup optimizer steps
             used by the schedule.
         expert_bias_update_end_rate: Final bias update rate for scheduled decay.
         expert_bias_clip: Optional symmetric clip magnitude for bias entries.
-        expert_bias_warmup_steps: Number of training forwards to skip before updates.
+        expert_bias_warmup_steps: Number of optimizer steps to skip before updates.
         disable_original_router_aux_loss: Whether to zero the original router
             auxiliary-loss coefficient when ALF routing is enabled.
 
@@ -550,6 +578,7 @@ def _load_checkpoint_state_dict(checkpoint: Path) -> dict[str, torch.Tensor]:
 __all__ = [
     "apply_aux_loss_free_router",
     "attach_router_load_tracking",
+    "reset_auxiliary_loss_free_router_loads",
     "build_model_and_tokenizer",
     "disable_router_aux_loss",
     "set_router_aux_loss_coef",
@@ -557,4 +586,5 @@ __all__ = [
     "iter_auxiliary_loss_free_routers",
     "load_model_for_inspection",
     "replace_qwen3_moe_routers",
+    "update_auxiliary_loss_free_router_biases",
 ]

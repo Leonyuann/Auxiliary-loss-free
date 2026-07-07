@@ -49,7 +49,7 @@ of upward and downward bias writes.
 `bias_update_schedule="constant"` keeps `u` unchanged. Set
 `bias_update_schedule="linear"` with `bias_update_schedule_steps` to linearly
 decay `u` from `bias_update_rate` to `bias_update_end_rate` over post-warmup
-router training forwards; after the schedule length, the end rate is held.
+optimizer steps; after the schedule length, the end rate is held.
 
 ```bash
 uv run alf-train experiments/qwen3_moe_tiny_alf.py \

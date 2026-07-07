@@ -65,8 +65,9 @@ each preparation invocation targets 10B new train tokens, and the training confi
 use 100k steps with a global batch of 65,536 tokens on two GPUs.
 
 All three C4 baseline configs keep `training.gradient_checkpointing` disabled for
-fair throughput comparisons; ALF and ALF-EMA also require it because bias and EMA
-updates are forward side effects. The scaled configs use `max_grad_norm=1.0`,
+fair throughput comparisons; ALF and ALF-EMA also require it because checkpoint
+recomputation would double-count routed tokens before the optimizer-step bias
+update. The scaled configs use `max_grad_norm=1.0`,
 FP32 AdamW optimizer state for BF16 parameters, and slower scheduled ALF bias
 updates to make the 100k-step run less brittle.
 
@@ -124,8 +125,8 @@ Supported ALF bias update policies:
 
 Bias update rate scheduling defaults to `--alf.bias_update_schedule constant`. Use
 `linear` with `--alf.bias_update_schedule_steps` to decay from
-`--alf.bias_update_rate` to `--alf.bias_update_end_rate` over post-warmup router
-training forwards.
+`--alf.bias_update_rate` to `--alf.bias_update_end_rate` over post-warmup
+optimizer steps.
 
 Checkpoints include the experiment config in `alf_experiment_config.json`, so a copied
 checkpoint directory can still be inspected with `alf-inspect-router`.

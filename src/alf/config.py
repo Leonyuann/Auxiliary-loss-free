@@ -143,13 +143,13 @@ class AlfConfig:
             updated by the ``balanced_topk_sign`` policy.
         bias_update_schedule: Schedule for the bias update rate. Supported values are
             ``constant`` and ``linear``.
-        bias_update_schedule_steps: Number of post-warmup router calls used by the
+        bias_update_schedule_steps: Number of post-warmup optimizer steps used by the
             bias update schedule. Required for ``linear``.
         bias_update_end_rate: Final bias update rate for scheduled decay.
         bias_init: Initial expert bias value.
         bias_clip: Optional absolute clipping limit for expert bias.
-        update_interval: Number of router calls between bias updates.
-        warmup_steps: Number of router calls before bias updates begin.
+        update_interval: Number of optimizer steps between bias updates.
+        warmup_steps: Number of optimizer steps before bias updates begin.
         disable_router_aux_loss: Whether to set the original router aux loss to zero.
     """
 

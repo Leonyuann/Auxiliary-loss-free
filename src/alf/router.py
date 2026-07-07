@@ -39,18 +39,18 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         hidden_dim: Token hidden-state width.
         expert_bias_update_rate: Step size used when updating the expert bias.
         expert_bias_update_policy: Strategy used to convert load error into bias delta.
-        expert_bias_update_interval: Number of training forwards between bias updates.
+        expert_bias_update_interval: Number of optimizer steps between bias updates.
         expert_bias_update_topk: Number of positive-error and negative-error experts
             updated by the ``balanced_topk_sign`` policy.
         expert_bias_update_schedule: Schedule used for bias update rates.
-        expert_bias_update_schedule_steps: Number of post-warmup training forwards
+        expert_bias_update_schedule_steps: Number of post-warmup optimizer steps
             used by the schedule.
         expert_bias_update_end_rate: Final bias update rate for scheduled decay.
         expert_bias_clip: Optional absolute clipping value for expert bias entries.
-        expert_bias_warmup_steps: Number of training forwards to skip before updates.
+        expert_bias_warmup_steps: Number of optimizer steps to skip before updates.
         weight: Router projection weights with shape `(num_experts, hidden_dim)`.
         expert_bias: Non-gradient bias applied only for top-k expert selection.
-        training_steps: Number of training-mode forwards seen by this router.
+        training_steps: Number of optimizer-step bias update attempts seen by this router.
         bias_update_steps: Number of times the expert bias has been updated.
         last_expert_load: Last observed selected-expert counts.
         last_load_fraction: Last observed selected-expert fractions.
@@ -97,16 +97,16 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
             expert_bias_update_policy: Bias update policy. Supported values are
                 `proportional`, `sign`, `ema`, `accumulated_sign`, and
                 `balanced_topk_sign`.
-            expert_bias_update_interval: Number of training forwards between updates.
+            expert_bias_update_interval: Number of optimizer steps between updates.
             expert_bias_update_topk: Number of positive-error and negative-error experts
                 updated by the ``balanced_topk_sign`` policy.
             expert_bias_update_schedule: Schedule used for bias update rates.
                 Supported values are ``constant`` and ``linear``.
-            expert_bias_update_schedule_steps: Number of post-warmup training forwards
+            expert_bias_update_schedule_steps: Number of post-warmup optimizer steps
                 used by the schedule. Required when using ``linear``.
             expert_bias_update_end_rate: Final bias update rate for scheduled decay.
             expert_bias_clip: Optional symmetric clip magnitude for bias entries.
-            expert_bias_warmup_steps: Number of training forwards to skip before updates.
+            expert_bias_warmup_steps: Number of optimizer steps to skip before updates.
 
         Raises:
             ValueError: If any hyperparameter is inconsistent.
@@ -184,6 +184,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         self.register_buffer("training_steps", torch.zeros((), dtype=torch.long))
         self.register_buffer("bias_update_steps", torch.zeros((), dtype=torch.long))
         self.register_buffer("last_expert_load", torch.zeros(self.num_experts, dtype=torch.long))
+        self.register_buffer("accumulated_expert_load", torch.zeros(self.num_experts, dtype=torch.long))
         self.register_buffer("last_load_fraction", torch.zeros(self.num_experts, dtype=torch.float32))
         self.register_buffer("last_bias_delta", torch.zeros(self.num_experts, dtype=torch.float32))
         self.register_buffer("last_bias_update_rate", torch.zeros((), dtype=torch.float32))
@@ -231,15 +232,15 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
             expert_bias_init: Initial scalar value copied into all expert bias entries.
             expert_bias_update_rate: Update magnitude used for load-balancing bias steps.
             expert_bias_update_policy: Bias update policy.
-            expert_bias_update_interval: Number of training forwards between updates.
+            expert_bias_update_interval: Number of optimizer steps between updates.
             expert_bias_update_topk: Number of positive-error and negative-error experts
                 updated by the ``balanced_topk_sign`` policy.
             expert_bias_update_schedule: Schedule used for bias update rates.
-            expert_bias_update_schedule_steps: Number of post-warmup training forwards
+            expert_bias_update_schedule_steps: Number of post-warmup optimizer steps
                 used by the schedule.
             expert_bias_update_end_rate: Final bias update rate for scheduled decay.
             expert_bias_clip: Optional symmetric clip magnitude for bias entries.
-            expert_bias_warmup_steps: Number of training forwards to skip before updates.
+            expert_bias_warmup_steps: Number of optimizer steps to skip before updates.
 
         Returns:
             A new router initialized with copied Qwen3 router weights.
@@ -271,7 +272,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         return replacement
 
     def _record_expert_load(self, router_indices: Tensor) -> None:
-        """Record load statistics for the most recent routing decision.
+        """Record and accumulate load statistics for one routing decision.
 
         Args:
             router_indices: Selected expert indices with shape `(tokens, top_k)`.
@@ -282,13 +283,51 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
             expert_load = expert_load.to(device=self.last_expert_load.device, dtype=torch.long)
             if self.training and dist.is_available() and dist.is_initialized():
                 dist.all_reduce(expert_load, op=dist.ReduceOp.SUM)
-            self.last_expert_load.copy_(expert_load)
-            total_assignments = int(expert_load.sum().item())
-            if total_assignments == 0:
-                self.last_load_fraction.zero_()
-                return
-            load_fraction = expert_load.to(dtype=torch.float32) / float(total_assignments)
-            self.last_load_fraction.copy_(load_fraction.to(device=self.last_load_fraction.device))
+            self._set_load_statistics(expert_load)
+            if self.training:
+                self.accumulated_expert_load.add_(
+                    expert_load.to(device=self.accumulated_expert_load.device, dtype=self.accumulated_expert_load.dtype)
+                )
+
+    def _set_load_statistics(self, expert_load: Tensor) -> None:
+        """Store expert-count and fraction statistics.
+
+        Args:
+            expert_load: Per-expert assignment counts.
+        """
+
+        self.last_expert_load.copy_(expert_load.to(device=self.last_expert_load.device, dtype=torch.long))
+        total_assignments = int(expert_load.sum().item())
+        if total_assignments == 0:
+            self.last_load_fraction.zero_()
+            return
+        load_fraction = expert_load.to(dtype=torch.float32) / float(total_assignments)
+        self.last_load_fraction.copy_(load_fraction.to(device=self.last_load_fraction.device))
+
+    def reset_expert_load_accumulator(self) -> None:
+        """Reset expert load accumulated for the current optimizer step."""
+
+        with torch.no_grad():
+            self.accumulated_expert_load.zero_()
+
+    def update_expert_bias_from_accumulated_load(self) -> bool:
+        """Update expert bias once from accumulated optimizer-step load.
+
+        Returns:
+            `True` when the call produced a bias update event.
+        """
+
+        with torch.no_grad():
+            accumulated_load = self.accumulated_expert_load.detach().clone()
+            self.accumulated_expert_load.zero_()
+            if int(accumulated_load.sum().item()) == 0:
+                self.last_bias_delta.zero_()
+                self.last_bias_update_rate.zero_()
+                return False
+            self._set_load_statistics(accumulated_load.to(device=self.last_expert_load.device, dtype=torch.long))
+            previous_updates = int(self.bias_update_steps.item())
+            self._update_expert_bias()
+            return int(self.bias_update_steps.item()) > previous_updates
 
     def _update_expert_bias(self) -> None:
         """Update the non-gradient expert bias from the latest observed load."""
@@ -345,7 +384,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         """Compute the bias update rate for the current post-warmup step.
 
         Args:
-            steps_after_warmup: One-indexed training forward count after warmup.
+            steps_after_warmup: One-indexed optimizer-step count after warmup.
 
         Returns:
             The scalar bias update rate to apply for this step.
@@ -414,8 +453,6 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         router_scores = router_scores.to(router_logits.dtype)
 
         self._record_expert_load(router_indices)
-        if self.training:
-            self._update_expert_bias()
 
         return router_logits, router_scores, router_indices
 

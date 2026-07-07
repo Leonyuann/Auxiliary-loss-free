@@ -159,12 +159,11 @@ global for both experiment families.
 
 The scaled configs keep gradient checkpointing disabled for all three C4 baselines
 to make speed and memory comparisons use the same mode. ALF variants also require
-that setting because the router bias update is a forward side effect and checkpoint
-backward recomputation would advance the bias and EMA state a second time. Each
-scaled run clips gradients with `max_grad_norm=1.0` and keeps AdamW optimizer
-state in FP32 when model parameters are BF16; ALF sign and EMA use a two-forward
-update interval, warmup, clipping, and linear decay for the bias update rate under
-gradient accumulation.
+that setting because checkpoint backward recomputation would double-count routed
+tokens before the optimizer-step bias update. Each scaled run clips gradients with
+`max_grad_norm=1.0` and keeps AdamW optimizer state in FP32 when model parameters
+are BF16; ALF sign and EMA update bias once per optimizer step from accumulated
+global-batch expert load.
 
 ## Expected Commands
 

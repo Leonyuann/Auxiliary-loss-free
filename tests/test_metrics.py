@@ -96,6 +96,7 @@ def test_bias_update_delta_matrix_and_rows() -> None:
     step_deltas: dict[str, torch.Tensor] = {}
 
     model.layers[0](torch.ones(4, 2))
+    model.layers[0].update_expert_bias_from_accumulated_load()
     deltas, events = collect_bias_update_deltas(model, previous_steps)
     add_bias_update_deltas(step_deltas, deltas)
 
@@ -104,6 +105,7 @@ def test_bias_update_delta_matrix_and_rows() -> None:
     assert collect_bias_update_deltas(model, previous_steps) == ({}, 0)
 
     model.layers[1](torch.ones(4, 2))
+    model.layers[1].update_expert_bias_from_accumulated_load()
     deltas, events = collect_bias_update_deltas(model, previous_steps)
     add_bias_update_deltas(step_deltas, deltas)
 

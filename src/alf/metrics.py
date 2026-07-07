@@ -178,7 +178,7 @@ def collect_bias_update_deltas(
 
     Notes:
         The router only stores the latest delta, so callers should invoke this
-        after each forward pass when exact per-update tracking is needed.
+        after each optimizer-step bias update when exact per-update tracking is needed.
     """
 
     bias_deltas: dict[str, Tensor] = {}

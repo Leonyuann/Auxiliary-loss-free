@@ -150,6 +150,35 @@ def test_training_metrics_include_wandb_observability_keys(tmp_path: Path) -> No
     assert eval_record["expert_activation"]["eval"]["rows"]
 
 
+def test_alf_bias_updates_once_per_optimizer_step_with_accumulation(tmp_path: Path) -> None:
+    """ALF bias updates should happen once per router after gradient accumulation."""
+
+    output_dir = tmp_path / "alf-accumulation"
+    train(
+        "experiments/qwen3_moe_tiny_alf.py",
+        [
+            "--training.max_steps",
+            "1",
+            "--training.gradient_accumulation_steps",
+            "2",
+            "--training.output_dir",
+            str(output_dir),
+            "--training.save_every",
+            "1",
+            "--wandb.enabled",
+            "false",
+        ],
+    )
+
+    records = [
+        json.loads(line)
+        for line in (output_dir / "metrics.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    train_record = next(record for record in records if "train" in record)
+
+    assert train_record["train"]["bias_update_events"] == 2
+
+
 def test_validation_files_are_used_for_eval_metrics(tmp_path: Path) -> None:
     """Validation should use explicit validation files and validation sample limits."""
 

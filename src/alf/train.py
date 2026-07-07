@@ -40,7 +40,11 @@ from alf.metrics import (
     mean_maxvio,
     serialize_activation_matrix,
 )
-from alf.modeling import build_model_and_tokenizer
+from alf.modeling import (
+    build_model_and_tokenizer,
+    reset_auxiliary_loss_free_router_loads,
+    update_auxiliary_loss_free_router_biases,
+)
 from alf.wandb_logging import ExperimentLogger
 
 
@@ -305,6 +309,7 @@ def train(config_path: str | Path, overrides: list[str] | None = None) -> Path:
         while step < config.training.max_steps:
             if sampler is not None:
                 sampler.set_epoch(step)
+            reset_auxiliary_loss_free_router_loads(metric_model)
             optimizer.zero_grad(set_to_none=True)
             step_start = time.perf_counter()
             loss_totals = {"loss": 0.0, "lm_loss": 0.0, "aux_loss": 0.0, "aux_loss_scaled": 0.0}
@@ -331,13 +336,13 @@ def train(config_path: str | Path, overrides: list[str] | None = None) -> Path:
                     loss_totals[key] += breakdown[key] / config.training.gradient_accumulation_steps
                 tokens += int(batch["input_ids"].numel())
                 add_layer_counts(step_layer_counts, collect_expert_load_counts(metric_model))
-                bias_deltas, update_events = collect_bias_update_deltas(metric_model, router_bias_update_steps)
-                add_bias_update_deltas(step_bias_deltas, bias_deltas)
-                bias_update_events += update_events
 
             tokens = _sync_step_statistics(loss_totals, tokens, distributed, device)
             grad_norm = _clip_or_measure_gradient_norm(model, config.training.max_grad_norm)
             optimizer.step()
+            update_auxiliary_loss_free_router_biases(metric_model)
+            bias_deltas, bias_update_events = collect_bias_update_deltas(metric_model, router_bias_update_steps)
+            add_bias_update_deltas(step_bias_deltas, bias_deltas)
             scheduler.step()
             step += 1
             progress.update(1)
@@ -486,8 +491,9 @@ def _validate_training_config(config: Any) -> None:
 
     if config.alf.enabled and config.training.gradient_checkpointing:
         msg = (
-            "ALF routing updates expert bias as a forward side effect, so "
-            "training.gradient_checkpointing must be false when alf.enabled is true."
+            "ALF routing records expert load during forward passes, so "
+            "training.gradient_checkpointing must be false when alf.enabled is true; "
+            "checkpoint recomputation would double-count routed tokens."
         )
         raise ValueError(msg)
 
