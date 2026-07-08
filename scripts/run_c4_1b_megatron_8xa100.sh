@@ -22,6 +22,11 @@ block_size="${BLOCK_SIZE:-512}"
 micro_batch_size="${MICRO_BATCH_SIZE:-2}"
 global_batch_size="${GLOBAL_BATCH_SIZE:-16}"
 grad_accum="${GRADIENT_ACCUMULATION_STEPS:-4}"
+learning_rate="${LEARNING_RATE:-${LR:-3e-4}}"
+weight_decay="${WEIGHT_DECAY:-0.1}"
+warmup_steps="${WARMUP_STEPS:-1000}"
+scheduler_type="${SCHEDULER_TYPE:-cosine}"
+max_grad_norm="${MAX_GRAD_NORM:-1.0}"
 
 wandb_enabled="${WANDB_ENABLED:-true}"
 wandb_entity="${WANDB_ENTITY:-liangqingyuann-huazhong-university-of-science-and-technology}"
@@ -32,6 +37,11 @@ common_overrides=(
   --training.max_steps "$max_steps"
   --training.batch_size "$micro_batch_size"
   --training.gradient_accumulation_steps "$grad_accum"
+  --training.learning_rate "$learning_rate"
+  --training.weight_decay "$weight_decay"
+  --training.warmup_steps "$warmup_steps"
+  --training.scheduler_type "$scheduler_type"
+  --training.max_grad_norm "$max_grad_norm"
   --data.block_size "$block_size"
   --data.train_files "$train_token_file"
   --data.validation_files "$validation_token_file"
@@ -50,7 +60,10 @@ if [[ "${RUN_ALF:-1}" == "1" ]]; then
 fi
 
 if [[ "${RUN_EMA:-1}" == "1" ]]; then
-  "${train_cmd[@]}" "${torchrun_args[@]}" experiments/qwen3_moe_c4_1b_megatron_alf_ema.py     "${common_overrides[@]}"     --alf.bias_ema_beta "${ALF_EMA_BETA:-0.5}"     --alf.bias_update_rate "${ALF_EMA_RATE:-1e-1}"
+  "${train_cmd[@]}" "${torchrun_args[@]}" experiments/qwen3_moe_c4_1b_megatron_alf_ema.py \
+    "${common_overrides[@]}" \
+    --alf.bias_ema_beta "${ALF_EMA_BETA:-0.5}" \
+    --alf.bias_update_rate "${ALF_EMA_RATE:-1e-1}"
 fi
 
 if [[ "${RUN_AUX:-0}" == "1" ]]; then

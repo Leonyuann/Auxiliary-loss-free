@@ -98,6 +98,9 @@ Scripted launch shape:
 RUN_ALF=1 RUN_EMA=0 RUN_AUX=0 MAX_STEPS=10 bash scripts/run_c4_1b_megatron_8xa100.sh
 ```
 
+The launch script also accepts LR-related overrides such as `LR`/`LEARNING_RATE`,
+`WEIGHT_DECAY`, `WARMUP_STEPS`, `SCHEDULER_TYPE`, and `MAX_GRAD_NORM`.
+
 The Megatron entry point validates the 8-GPU topology, initializes Megatron
 model-parallel groups, builds the Megatron GPT/MoE model, and runs a minimal
 training loop with Megatron Core DDP/optimizer so expert and non-expert

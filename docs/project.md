@@ -221,8 +221,9 @@ CP=1, EP=4, and DP=2. The model uses 24 routed experts and top-3 routing, which
 places 6 experts on each expert-parallel rank.
 
 The project now has typed `MegatronConfig` fields, 1B ALF/ALF-EMA/aux-loss
-experiment configs, a scripted 8-GPU launch, and a Megatron-compatible ALF router
-that returns dense probability and routing-map tensors. ALF load counts are reduced
+experiment configs, a scripted 8-GPU launch with batch, data, W&B, and LR schedule
+overrides, and a Megatron-compatible ALF router that returns dense probability
+and routing-map tensors. ALF load counts are reduced
 over the expert-data-parallel group so expert-parallel shards are not double-counted
 when EP=4 and DP=2.
 

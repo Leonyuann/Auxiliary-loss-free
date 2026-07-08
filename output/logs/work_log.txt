@@ -275,3 +275,11 @@ Verification:
 - env PYTHONPATH=src uv run python -m py_compile src/alf/observability.py src/alf/train.py src/alf/megatron_train.py src/alf/metrics.py tests/test_metrics.py tests/test_train_inspect.py tests/test_megatron.py
 - env PYTHONPATH=src uv run pytest tests/test_metrics.py tests/test_train_inspect.py tests/test_megatron.py
 - env PYTHONPATH=src uv run pytest passed with 81 tests.
+
+## 2026-07-08 - Add Megatron launch LR overrides
+- Added `LR`/`LEARNING_RATE`, `WEIGHT_DECAY`, `WARMUP_STEPS`, `SCHEDULER_TYPE`, and `MAX_GRAD_NORM` environment overrides to `scripts/run_c4_1b_megatron_8xa100.sh`.
+- Passed the LR-related values through the existing dotted config override interface for ALF, ALF-EMA, and auxiliary-loss runs.
+- Documented the new launch-script overrides in README and project docs.
+
+Verification:
+- bash -n scripts/run_c4_1b_megatron_8xa100.sh
