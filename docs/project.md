@@ -224,7 +224,8 @@ that returns dense probability and routing-map tensors. ALF load counts are redu
 only over an explicit TP/CP/DP process group so expert-parallel shards are not
 double-counted.
 
-The current `alf-megatron-train` entry validates the topology and writes config
-snapshots, but it deliberately raises before reporting success because the full
-Megatron optimizer, forward/backward schedule, evaluation, and sharded checkpoint
-loop still needs to be connected.
+`alf-megatron-train` now validates the topology, initializes Megatron Core
+model-parallel groups, builds the GPT/MoE model, runs a minimal forward/backward
+training loop, applies ALF bias updates after optimizer steps, and writes per-rank
+checkpoint shards. The 8xA100 acceptance smoke still needs to be run on the target
+host before treating the path as production-ready.

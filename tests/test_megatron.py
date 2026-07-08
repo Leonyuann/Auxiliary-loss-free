@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import torch
 
-from alf.config import load_experiment_config
-from alf.megatron_router import MegatronAuxiliaryLossFreeTopKRouter, reduce_expert_load_counts
+from types import SimpleNamespace
+
+from alf.config import AlfConfig, ExperimentConfig, MegatronConfig, ModelConfig, load_experiment_config
+from alf.megatron_router import (
+    MegatronAuxiliaryLossFreeTopKRouter,
+    MegatronCoreAuxiliaryLossFreeTopKRouter,
+    reduce_expert_load_counts,
+)
 from alf.megatron_train import (
     estimate_moe_total_parameters,
+    build_megatron_layer_spec,
     megatron_parallel_world_size,
     megatron_transformer_config_kwargs,
     validate_megatron_config,
@@ -60,6 +67,75 @@ def test_megatron_transformer_kwargs_disable_aux_loss_for_alf_only() -> None:
     assert alf_kwargs["moe_router_topk"] == 3
     assert alf_kwargs["moe_aux_loss_coeff"] == 0.0
     assert aux_kwargs["moe_aux_loss_coeff"] == aux_config.model.router_aux_loss_coef
+
+
+def test_megatron_transformer_config_instantiates_for_alf_softmax_bias() -> None:
+    """ALF kwargs should not use Megatron's invalid native softmax expert-bias mode."""
+
+    from megatron.core.transformer.transformer_config import TransformerConfig
+
+    config = load_experiment_config("experiments/qwen3_moe_c4_1b_megatron_alf.py")
+    kwargs = megatron_transformer_config_kwargs(config)
+
+    transformer_config = TransformerConfig(**kwargs)
+
+    assert transformer_config.moe_router_enable_expert_bias is False
+    assert transformer_config.moe_router_score_function == "softmax"
+
+
+def test_megatron_layer_spec_installs_project_alf_router() -> None:
+    """ALF Megatron models should use the project router, not native TopKRouter."""
+
+    config = load_experiment_config("experiments/qwen3_moe_c4_1b_megatron_alf_ema.py")
+
+    layer_spec = build_megatron_layer_spec(config)
+    router_factory = layer_spec.submodules.mlp.keywords["submodules"].router
+
+    assert router_factory.func is MegatronCoreAuxiliaryLossFreeTopKRouter
+    assert router_factory.keywords["alf_config"].bias_update_policy == "ema"
+    assert router_factory.keywords["alf_config"].bias_ema_beta == 0.5
+
+
+def test_megatron_core_alf_router_uses_accumulated_ema_update() -> None:
+    """Core Megatron ALF router should preserve optimizer-step EMA semantics."""
+
+    from megatron.core.transformer.transformer_config import TransformerConfig
+
+    config = ExperimentConfig(
+        name="tiny-megatron-router",
+        model=ModelConfig(
+            hidden_size=2,
+            intermediate_size=4,
+            num_hidden_layers=1,
+            num_attention_heads=1,
+            num_key_value_heads=1,
+            num_experts=4,
+            num_experts_per_tok=3,
+        ),
+        megatron=MegatronConfig(enabled=True, expert_model_parallel_size=4, data_parallel_size=2),
+        alf=AlfConfig(enabled=True, bias_update_rate=1.0, bias_update_policy="ema", bias_ema_beta=0.5),
+    )
+    kwargs = megatron_transformer_config_kwargs(config)
+    kwargs["perform_initialization"] = False
+    transformer_config = TransformerConfig(**kwargs)
+    process_groups = SimpleNamespace(tp=None, cp=None, tp_cp=None, tp_dp_cp=None)
+    router = MegatronCoreAuxiliaryLossFreeTopKRouter(
+        config=transformer_config,
+        pg_collection=process_groups,
+        alf_config=config.alf,
+    )
+    with torch.no_grad():
+        router.weight.copy_(torch.tensor([[4.0, 0.0], [3.0, 0.0], [2.0, 0.0], [1.0, 0.0]]))
+        router.expert_bias.copy_(torch.tensor([0.0, 0.0, 0.0, 2.0]))
+
+    router.train()
+    router.routing(torch.tensor([[[4.0, 3.0, 2.0, 1.0]]], device=router.weight.device))
+
+    assert router.accumulated_expert_load.cpu().tolist() == [1, 1, 0, 1]
+    assert router.update_expert_bias_from_accumulated_load() is True
+    expected_ema = torch.tensor([-1 / 24, -1 / 24, 1 / 8, -1 / 24], device=router.load_error_ema.device)
+    assert torch.allclose(router.load_error_ema, expected_ema)
+    assert torch.allclose(router.last_bias_delta, router.load_error_ema)
 
 
 def test_megatron_alf_router_returns_top3_probability_map() -> None:

@@ -98,10 +98,12 @@ Scripted launch shape:
 RUN_ALF=1 RUN_EMA=0 RUN_AUX=0 MAX_STEPS=10 bash scripts/run_c4_1b_megatron_8xa100.sh
 ```
 
-The Megatron entry point currently validates the 8-GPU topology, writes config
-snapshots, and exposes Megatron-compatible ALF router/model construction helpers.
-It intentionally raises before claiming a training run is complete until the full
-Megatron optimizer, schedule, and sharded checkpoint loop is wired.
+The Megatron entry point validates the 8-GPU topology, initializes Megatron
+model-parallel groups, builds the Megatron GPT/MoE model, and runs a minimal
+training loop with data-parallel DDP, optimizer-step ALF bias updates, JSONL
+metrics, and per-rank checkpoint shards. The current environment has not run the
+8xA100 acceptance smoke, so treat that hardware validation as the next required
+step before long experiments.
 
 ## W&B Observability
 
