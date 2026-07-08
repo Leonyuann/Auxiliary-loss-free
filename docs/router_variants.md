@@ -70,3 +70,15 @@ ALF runs without changing the baseline routing behavior.
 Add the policy name to `AlfConfig.bias_update_policy`, implement it in the router
 bias update branch, expose it through metrics, and add a unit test showing the exact
 bias delta for a deterministic load pattern.
+
+
+## Megatron Router Adapter
+
+`MegatronAuxiliaryLossFreeTopKRouter` adapts the same ALF selection rule to the
+Megatron MoE router contract. It returns a dense probability tensor and boolean
+routing map instead of the Hugging Face `(logits, scores, indices)` tuple. The
+1B Megatron configs use top-3 routing with 24 experts.
+
+For EP=4/DP=2 runs, expert-load reduction must use the Megatron TP/CP/DP group and
+exclude the EP dimension. Reducing over the world group would double-count expert
+parallel shards and corrupt both MaxVio metrics and ALF bias updates.

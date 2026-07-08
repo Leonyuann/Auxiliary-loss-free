@@ -209,3 +209,22 @@ are working before scaling experiments.
 - Qwen3 Technical Report: https://arxiv.org/abs/2505.09388
 - Auxiliary-Loss-Free Load Balancing Strategy for Mixture-of-Experts: https://arxiv.org/abs/2408.15664
 - Hugging Face Transformers Qwen3 MoE implementation: https://github.com/huggingface/transformers
+
+
+## Megatron Core 8xA100 Extension
+
+The next scaling target is a single-node 8xA100 80GB Megatron Core path for a
+approximately 1B-parameter Qwen-style MoE. The default topology is TP=1, PP=1,
+CP=1, EP=4, and DP=2. The model uses 24 routed experts and top-3 routing, which
+places 6 experts on each expert-parallel rank.
+
+The project now has typed `MegatronConfig` fields, 1B ALF/ALF-EMA/aux-loss
+experiment configs, a scripted 8-GPU launch, and a Megatron-compatible ALF router
+that returns dense probability and routing-map tensors. ALF load counts are reduced
+only over an explicit TP/CP/DP process group so expert-parallel shards are not
+double-counted.
+
+The current `alf-megatron-train` entry validates the topology and writes config
+snapshots, but it deliberately raises before reporting success because the full
+Megatron optimizer, forward/backward schedule, evaluation, and sharded checkpoint
+loop still needs to be connected.

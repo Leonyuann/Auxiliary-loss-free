@@ -193,3 +193,19 @@ Verification:
 - Added metrics and training JSONL tests for entropy output.
 - Synchronized C4 300M helper tests with the current committed short-run configs.
 - Verification: `env PYTHONPATH=src uv run pytest` passed with 61 tests.
+
+
+## 2026-07-08 - Megatron Core 8xA100 1B MoE scaffolding
+- Added `MegatronConfig` with TP=1, PP=1, CP=1, EP=4, DP=2 defaults and CLI override support.
+- Added `megatron-core>=0.18,<0.19` via uv and exposed `alf-megatron-train`.
+- Added 1B C4 Megatron ALF, ALF-EMA, and auxiliary-loss configs using 24 experts and top-3 routing.
+- Added a Megatron-compatible ALF router adapter returning dense probability/routing-map tensors and an explicit TP/CP/DP load reducer to avoid EP double counting.
+- Added Megatron config validation, TransformerConfig kwargs, and GPTModel construction helpers.
+- Added the 8xA100 launch script and docs for the current Megatron path.
+- The Megatron entrypoint deliberately raises after validation/config snapshot because the optimizer/schedule/eval/sharded-checkpoint training loop is not wired yet.
+
+Verification:
+- bash -n scripts/run_c4_1b_megatron_8xa100.sh
+- env PYTHONPATH=src uv run pytest tests/test_megatron.py tests/test_config.py
+- env PYTHONPATH=src uv run python -m alf.megatron_train experiments/qwen3_moe_c4_1b_megatron_alf.py --training.output_dir /tmp/alf-megatron-entry-smoke --wandb.enabled false raised the expected incomplete-loop RuntimeError after validation.
+- env PYTHONPATH=src uv run pytest passed with 67 tests.

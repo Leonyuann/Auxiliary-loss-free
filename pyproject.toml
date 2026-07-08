@@ -15,6 +15,7 @@ dependencies = [
     "tokenizers>=0.22.0",
     "transformers>=5.12.1",
     "wandb>=0.28.0",
+    "megatron-core>=0.18,<0.19",
 ]
 
 [build-system]
@@ -24,6 +25,7 @@ build-backend = "hatchling.build"
 [project.scripts]
 alf-train = "alf.train:main"
 alf-inspect-router = "alf.inspect:main"
+alf-megatron-train = "alf.megatron_train:main"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

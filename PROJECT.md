@@ -177,3 +177,27 @@ Acceptance criteria:
 
 Run the C4 300M baseline family with `bash scripts/run_c4_300m_baselines.sh`, then
 compare ALF sign, ALF EMA, and auxiliary-loss metrics in W&B and local JSONL logs.
+
+
+## Sprint 7: Megatron Core 8xA100 1B MoE Path
+
+Status: in progress.
+
+Passes: false.
+
+Goal: add a Megatron Core path for single-node 8xA100 80GB training with TP=1,
+PP=1, CP=1, EP=4, DP=2, and top-3 MoE routing.
+
+Delivered so far:
+
+- Added `MegatronConfig` and dotted override support through the existing config system.
+- Added 1B-family ALF, ALF-EMA, and auxiliary-loss Megatron experiment configs.
+- Added a scripted 8-GPU launch wrapper.
+- Added a Megatron-compatible ALF top-k router and explicit TP/CP/DP load reducer.
+- Added Megatron config validation, transformer-config generation, and GPTModel construction helpers.
+
+Remaining work:
+
+- Wire Megatron Core optimizer, forward/backward schedule, evaluation, and sharded checkpoint loop.
+- Replace the entrypoint's deliberate failure after config validation with real training execution.
+- Run the 8xA100 10-step acceptance check.

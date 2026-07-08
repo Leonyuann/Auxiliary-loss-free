@@ -41,6 +41,14 @@ def test_apply_dotted_overrides() -> None:
             "parameter",
             "--training.ddp_backend",
             "gloo",
+            "--megatron.enabled",
+            "true",
+            "--megatron.expert_model_parallel_size",
+            "4",
+            "--megatron.data_parallel_size",
+            "2",
+            "--megatron.global_batch_size",
+            "16",
         ],
     )
 
@@ -57,3 +65,7 @@ def test_apply_dotted_overrides() -> None:
     assert config.training.max_grad_norm == 0.5
     assert config.training.optimizer_state_dtype == "parameter"
     assert config.training.ddp_backend == "gloo"
+    assert config.megatron.enabled is True
+    assert config.megatron.expert_model_parallel_size == 4
+    assert config.megatron.data_parallel_size == 2
+    assert config.megatron.global_batch_size == 16

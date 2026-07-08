@@ -207,6 +207,37 @@ class WandbConfig:
 
 
 @dataclass
+class MegatronConfig:
+    """Megatron Core distributed training options.
+
+    Attributes:
+        enabled: Whether the experiment should use the Megatron training entry.
+        tensor_model_parallel_size: Tensor model parallel degree.
+        pipeline_model_parallel_size: Pipeline model parallel degree.
+        context_parallel_size: Context parallel degree.
+        expert_model_parallel_size: Expert parallel degree for MoE experts.
+        data_parallel_size: Data parallel degree.
+        micro_batch_size: Per-rank micro batch size consumed by Megatron.
+        global_batch_size: Global batch size across data-parallel workers.
+        distributed_optimizer: Whether to use Megatron's distributed optimizer.
+        moe_token_dispatcher_type: MoE token dispatcher name.
+        recompute_granularity: Optional activation recompute granularity.
+    """
+
+    enabled: bool = False
+    tensor_model_parallel_size: int = 1
+    pipeline_model_parallel_size: int = 1
+    context_parallel_size: int = 1
+    expert_model_parallel_size: int = 4
+    data_parallel_size: int = 2
+    micro_batch_size: int = 2
+    global_batch_size: int = 16
+    distributed_optimizer: bool = True
+    moe_token_dispatcher_type: str = "alltoall"
+    recompute_granularity: str | None = None
+
+
+@dataclass
 class ExperimentConfig:
     """Complete experiment configuration.
 
@@ -218,6 +249,7 @@ class ExperimentConfig:
         alf: Auxiliary-loss-free routing options.
         eval: Validation evaluation options.
         wandb: W&B logging options.
+        megatron: Megatron Core distributed training options.
     """
 
     name: str
@@ -227,6 +259,7 @@ class ExperimentConfig:
     alf: AlfConfig = field(default_factory=AlfConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
     wandb: WandbConfig = field(default_factory=WandbConfig)
+    megatron: MegatronConfig = field(default_factory=MegatronConfig)
 
 
 def parse_config_args(argv: Sequence[str] | None = None) -> tuple[Path, list[str]]:

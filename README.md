@@ -77,6 +77,32 @@ Direct DDP launch example:
 uv run torchrun --standalone --nproc_per_node=2 -m alf.train experiments/qwen3_moe_c4_300m_alf.py
 ```
 
+## Megatron Core 1B MoE Plan
+
+The repository now includes Megatron Core experiment configs for a single-node
+8xA100 80GB target with TP=1, PP=1, CP=1, EP=4, and DP=2. The default 1B-family
+shape uses 24 routed experts with top-3 activation, so each expert-parallel rank
+owns 6 local experts.
+
+Configs:
+
+```bash
+experiments/qwen3_moe_c4_1b_megatron_alf.py
+experiments/qwen3_moe_c4_1b_megatron_alf_ema.py
+experiments/qwen3_moe_c4_1b_megatron_aux_loss.py
+```
+
+Scripted launch shape:
+
+```bash
+RUN_ALF=1 RUN_EMA=0 RUN_AUX=0 MAX_STEPS=10 bash scripts/run_c4_1b_megatron_8xa100.sh
+```
+
+The Megatron entry point currently validates the 8-GPU topology, writes config
+snapshots, and exposes Megatron-compatible ALF router/model construction helpers.
+It intentionally raises before claiming a training run is complete until the full
+Megatron optimizer, schedule, and sharded checkpoint loop is wired.
+
 ## W&B Observability
 
 Training runs log both local JSONL metrics and W&B metrics. By default, W&B is enabled

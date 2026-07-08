@@ -158,6 +158,7 @@ dependencies = [
     { name = "accelerate" },
     { name = "datasets" },
     { name = "matplotlib" },
+    { name = "megatron-core" },
     { name = "pytest" },
     { name = "safetensors" },
     { name = "tokenizers" },
@@ -172,6 +173,7 @@ requires-dist = [
     { name = "accelerate", specifier = ">=1.14.0" },
     { name = "datasets", specifier = ">=5.0.0" },
     { name = "matplotlib", specifier = ">=3.11.0" },
+    { name = "megatron-core", specifier = ">=0.18,<0.19" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "safetensors", specifier = ">=0.8.0" },
     { name = "tokenizers", specifier = ">=0.22.0" },
@@ -975,6 +977,23 @@ source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple" }
 sdist = { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/d6/54/cfe61301667036ec958cb99bd3efefba235e65cdeb9c84d24a8293ba1d90/mdurl-0.1.2.tar.gz", hash = "sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba", size = 8729, upload-time = "2022-08-14T12:40:10.846Z" }
 wheels = [
     { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/b3/38/89ba8ad64ae25be8de66a6d463314cf1eb366222074cfda9ee839c56a4b4/mdurl-0.1.2-py3-none-any.whl", hash = "sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8", size = 9979, upload-time = "2022-08-14T12:40:09.779Z" },
+]
+
+[[package]]
+name = "megatron-core"
+version = "0.18.0"
+source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "torch" },
+]
+sdist = { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/4e/5f/31dbdff0e758598050fbee8bacad0f034447817db34b6399100acd5d3929/megatron_core-0.18.0.tar.gz", hash = "sha256:8feff0cd371e5ef26dc36636a23e197983ddddf10b43847871697b89be8cd6ea", size = 1602287, upload-time = "2026-06-23T00:15:45.679Z" }
+wheels = [
+    { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/dc/87/91eb38d2f8fac7fda3319b4e0862078f8ed6e40463b09e013a4d33ceea7f/megatron_core-0.18.0-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:14a3df6bf4de0c3cc648562c56bf79aba2330ef6bae2affd2e7d60d1c3e25a45", size = 1959237, upload-time = "2026-06-23T00:15:44.871Z" },
+    { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/f1/15/44d3ed47df82ba40be75965d26cee8230ab7ab54f9cbfa39b668544c75eb/megatron_core-0.18.0-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:beb6f7b1462a82723cef31773dae60f54a2f7bc809e5e050cf9f59c344b5a373", size = 1967128, upload-time = "2026-06-23T00:15:41.937Z" },
+    { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/c7/41/6e5db57ab837b32af86241c32d5f12be1badf1964562d9727e25ede3b8c4/megatron_core-0.18.0-cp313-cp313-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:69e0d767300c57c8a84d7c35d86e33eb3dd9f7fa7cb78ad5b668e10c4d077bb4", size = 1959209, upload-time = "2026-06-23T00:15:47.095Z" },
+    { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/32/22/5e3f4a61aed3e55b8e02f4c1e065eb0fd4b2676b5962b0bc71326cd5f46e/megatron_core-0.18.0-cp313-cp313-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:6c216609c139c6a75bd3db1ce1e98f776cfa2a0736fdb3d0e90df74a1a6d4da6", size = 1967259, upload-time = "2026-06-23T00:15:43.303Z" },
 ]
 
 [[package]]
