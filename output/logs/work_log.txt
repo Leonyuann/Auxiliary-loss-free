@@ -262,3 +262,16 @@ Verification:
 - env PYTHONPATH=src uv run python -m py_compile src/alf/megatron_train.py tests/test_megatron.py
 - env PYTHONPATH=src uv run pytest tests/test_megatron.py
 - env PYTHONPATH=src uv run pytest passed with 77 tests.
+
+## 2026-07-08 - Add system, MoE, and profile observability metrics
+- Added shared observability helpers for CUDA-event step timing, rolling averages, CUDA memory, MoE load summaries, and optional all-to-all profiling windows.
+- Extended HF/DDP training logs with `system/*`, `moe/*`, and optional `profile/all_to_all_*` metrics while keeping existing train/eval/router keys stable.
+- Extended Megatron training logs and W&B output with PyTorch-path train metrics, router summaries, expert activation heatmaps/tables, system metrics, MoE load summaries, and optional all-to-all profile metrics.
+- Adjusted Megatron throughput accounting to scale local tokens by configured DP, avoiding EP duplicate-token overcounting.
+- Documented the new W&B keys and all-to-all profiling environment variables.
+
+Verification:
+- bash -n scripts/run_c4_1b_megatron_8xa100.sh
+- env PYTHONPATH=src uv run python -m py_compile src/alf/observability.py src/alf/train.py src/alf/megatron_train.py src/alf/metrics.py tests/test_metrics.py tests/test_train_inspect.py tests/test_megatron.py
+- env PYTHONPATH=src uv run pytest tests/test_metrics.py tests/test_train_inspect.py tests/test_megatron.py
+- env PYTHONPATH=src uv run pytest passed with 81 tests.

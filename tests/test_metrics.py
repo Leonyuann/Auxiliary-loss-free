@@ -15,7 +15,9 @@ from alf.metrics import (
     layerwise_normalized_entropy_rows,
     load_balance_metrics,
     mean_maxvio,
+    collect_router_metrics,
 )
+from alf.observability import AllToAllProfiler, summarize_moe_observability
 from alf.router import Qwen3MoeAuxiliaryLossFreeTopKRouter
 
 
@@ -28,6 +30,67 @@ def test_load_balance_metrics() -> None:
     assert metrics["expert_load_min"] == 1.0
     assert metrics["expert_load_max"] == 3.0
     assert metrics["expert_load_max_min_ratio"] == 3.0
+
+
+def test_summarize_moe_observability_from_layer_counts() -> None:
+    """Summarize aggregate MoE load metrics for W&B observability."""
+
+    counts = {
+        "layer.0.router": torch.tensor([4, 4, 4, 4]),
+        "layer.1.router": torch.tensor([8, 0, 0, 0]),
+    }
+
+    metrics = summarize_moe_observability(counts)
+
+    assert metrics["expert_load_max_over_mean"] == 2.0
+    assert metrics["expert_load_cv"] > 0.0
+    assert 0.0 <= metrics["expert_load_normalized_entropy"] <= 1.0
+    assert metrics["expert_load_layerwise_normalized_entropy_mean"] == 0.5
+    assert metrics["overflow_rate"] == 0.0
+    assert metrics["dropped_token_rate"] == 0.0
+
+
+def test_collect_router_metrics_accepts_megatron_style_router() -> None:
+    """Router metrics should include Megatron routers with config-based names."""
+
+    class FakeMegatronRouter(torch.nn.Module):
+        """Small router exposing Megatron-style load attributes."""
+
+        def __init__(self) -> None:
+            """Create fake load and config state."""
+
+            super().__init__()
+            self.config = type("Config", (), {"num_moe_experts": 3, "moe_router_topk": 2})()
+            self.register_buffer("last_expert_load", torch.tensor([1, 2, 3]))
+            self.register_buffer("expert_bias", torch.tensor([0.1, 0.0, -0.1]))
+
+    model = torch.nn.Module()
+    model.router = FakeMegatronRouter()
+
+    metrics = collect_router_metrics(model)
+
+    assert metrics["num_routers"] == 1
+    assert metrics["routers"]["router"]["num_experts"] == 3
+    assert metrics["routers"]["router"]["top_k"] == 2
+    assert metrics["aggregate_load"]["total_assignments"] == 6
+    assert "aggregate_bias" in metrics
+
+
+def test_all_to_all_profiler_emits_profile_keys_when_active() -> None:
+    """Profiler windows should emit all-to-all timing metric names."""
+
+    profiler = AllToAllProfiler(every_steps=1, window_steps=1)
+
+    profiler.start(1)
+    _ = torch.ones(1) + 1
+    metrics = profiler.stop(step_time_ms=10.0)
+
+    assert set(metrics) >= {
+        "all_to_all_time_ms",
+        "all_to_all_time_ratio",
+        "all_to_all_profile_active",
+    }
+
 
 
 def test_compute_maxvio_for_balanced_and_unbalanced_counts() -> None:

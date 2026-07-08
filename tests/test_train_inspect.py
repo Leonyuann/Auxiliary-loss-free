@@ -142,6 +142,22 @@ def test_training_metrics_include_wandb_observability_keys(tmp_path: Path) -> No
         "maxvio_batch",
         "maxvio_batch_rolling_100",
     }
+    assert "system" in train_record
+    assert set(train_record["system"]) >= {
+        "step_time_ms",
+        "step_time_ms_rolling_100",
+        "tokens_per_sec",
+        "tokens_per_sec_rolling_100",
+        "gpu_memory_allocated",
+    }
+    assert "moe" in train_record
+    assert set(train_record["moe"]) >= {
+        "expert_load_max_over_mean",
+        "expert_load_cv",
+        "expert_load_normalized_entropy",
+        "overflow_rate",
+        "dropped_token_rate",
+    }
     assert eval_record["eval/ppl"] > 0.0
     assert eval_record["eval/maxvio_global"] >= 0.0
     assert 0.0 <= eval_record["eval/layerwise_normalized_entropy_mean"] <= 1.0

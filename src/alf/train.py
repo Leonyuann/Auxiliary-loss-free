@@ -7,7 +7,6 @@ import math
 import os
 import random
 import shutil
-import time
 from collections import deque
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -39,6 +38,13 @@ from alf.metrics import (
     loss_breakdown,
     mean_maxvio,
     serialize_activation_matrix,
+)
+from alf.observability import (
+    AllToAllProfiler,
+    CudaStepTimer,
+    MovingAverage,
+    gpu_memory_metrics,
+    summarize_moe_observability,
 )
 from alf.modeling import (
     build_model_and_tokenizer,
@@ -302,6 +308,10 @@ def train(config_path: str | Path, overrides: list[str] | None = None) -> Path:
     data_iter = _cycle(loader)
     last_checkpoint = output_dir / "latest"
     maxvio_window: deque[float] = deque(maxlen=100)
+    step_time_window = MovingAverage(window_size=100)
+    throughput_window = MovingAverage(window_size=100)
+    step_timer = CudaStepTimer(device)
+    all_to_all_profiler = AllToAllProfiler.from_env()
     best_eval_ppl: float | None = None
     best_eval_maxvio: float | None = None
 
@@ -309,9 +319,11 @@ def train(config_path: str | Path, overrides: list[str] | None = None) -> Path:
         while step < config.training.max_steps:
             if sampler is not None:
                 sampler.set_epoch(step)
+            step_number = step + 1
+            all_to_all_profiler.start(step_number)
+            step_timer.start()
             reset_auxiliary_loss_free_router_loads(metric_model)
             optimizer.zero_grad(set_to_none=True)
-            step_start = time.perf_counter()
             loss_totals = {"loss": 0.0, "lm_loss": 0.0, "aux_loss": 0.0, "aux_loss_scaled": 0.0}
             tokens = 0
             step_layer_counts: dict[str, torch.Tensor] = {}
@@ -347,7 +359,9 @@ def train(config_path: str | Path, overrides: list[str] | None = None) -> Path:
             step += 1
             progress.update(1)
 
-            elapsed = max(time.perf_counter() - step_start, 1e-9)
+            step_time_ms = _sync_max_scalar(step_timer.stop_ms(), distributed, device)
+            elapsed = max(step_time_ms / 1000.0, 1e-9)
+            profile_metrics = all_to_all_profiler.stop(step_time_ms)
             maxvio_batch = mean_maxvio(step_layer_counts)
             activation_matrix, activation_layers = activation_matrix_from_counts(step_layer_counts)
             activation_matrix_json = serialize_activation_matrix(activation_matrix, activation_layers)
@@ -355,6 +369,17 @@ def train(config_path: str | Path, overrides: list[str] | None = None) -> Path:
             bias_update_matrix, bias_update_layers = bias_update_matrix_from_deltas(step_bias_deltas)
             bias_update_rows = bias_update_rows_from_deltas(step_bias_deltas, step=step)
 
+            tokens_per_second = tokens / elapsed
+            system_metrics = _sync_system_metrics(gpu_memory_metrics(device), distributed, device)
+            system_metrics.update(
+                {
+                    "step_time_ms": step_time_ms,
+                    "step_time_ms_rolling_100": step_time_window.update(step_time_ms),
+                    "tokens_per_sec": tokens_per_second,
+                    "tokens_per_sec_rolling_100": throughput_window.update(tokens_per_second),
+                }
+            )
+            moe_metrics = summarize_moe_observability(step_layer_counts)
             record: dict[str, Any] = {
                 "step": step,
                 "train": {
@@ -364,10 +389,12 @@ def train(config_path: str | Path, overrides: list[str] | None = None) -> Path:
                     "aux_loss_scaled": loss_totals["aux_loss_scaled"],
                     "learning_rate": float(scheduler.get_last_lr()[0]),
                     "grad_norm": grad_norm,
-                    "tokens_per_second": tokens / elapsed,
+                    "tokens_per_second": tokens_per_second,
                     "maxvio_batch": maxvio_batch,
                     "bias_update_events": bias_update_events,
                 },
+                "system": system_metrics,
+                "moe": moe_metrics,
                 "router": collect_router_metrics(metric_model),
                 "expert_activation": {
                     "train": {
@@ -376,6 +403,8 @@ def train(config_path: str | Path, overrides: list[str] | None = None) -> Path:
                     }
                 },
             }
+            if profile_metrics:
+                record["profile"] = profile_metrics
             if bias_update_events > 0:
                 record["bias_update"] = {
                     "train": {
@@ -728,6 +757,40 @@ def _sync_step_statistics(
     for index, key in enumerate(keys):
         loss_totals[key] = float(tensor[index].item() / state.world_size)
     return int(tensor[-1].item())
+
+
+def _sync_max_scalar(value: float, state: DistributedState, device: torch.device) -> float:
+    """Synchronize a scalar by taking the maximum across workers.
+
+    Args:
+        value: Local scalar value.
+        state: Distributed runtime state.
+        device: Device used for collective tensors.
+
+    Returns:
+        Maximum value across ranks when distributed, otherwise the local value.
+    """
+
+    if not state.enabled:
+        return float(value)
+    tensor = torch.tensor(float(value), dtype=torch.float64, device=device)
+    dist.all_reduce(tensor, op=dist.ReduceOp.MAX)
+    return float(tensor.item())
+
+
+def _sync_system_metrics(metrics: dict[str, float], state: DistributedState, device: torch.device) -> dict[str, float]:
+    """Synchronize system metrics using maximum across workers.
+
+    Args:
+        metrics: Local system metrics.
+        state: Distributed runtime state.
+        device: Device used for collective tensors.
+
+    Returns:
+        System metrics reduced with max across ranks.
+    """
+
+    return {key: _sync_max_scalar(value, state, device) for key, value in metrics.items()}
 
 
 def _set_seed(seed: int) -> None:

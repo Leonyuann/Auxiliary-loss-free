@@ -127,6 +127,10 @@ Core W&B metric keys:
 - `train/loss`, `train/lm_loss`, `train/aux_loss`, `train/aux_loss_scaled`
 - `train/learning_rate`, `train/grad_norm`, `train/tokens_per_second`
 - `train/maxvio_batch`, `train/maxvio_batch_rolling_100`
+- `system/step_time_ms`, `system/step_time_ms_rolling_100`, `system/tokens_per_sec`, `system/gpu_memory_allocated`
+- `moe/expert_load_max_over_mean`, `moe/expert_load_cv`, `moe/expert_load_normalized_entropy`
+- `moe/overflow_rate`, `moe/dropped_token_rate` are logged as `0.0` until a dispatcher exposes real overflow/drop counters
+- `profile/all_to_all_time_ms`, `profile/all_to_all_time_ratio` when `ALF_PROFILE_ALL_TO_ALL_EVERY` and `ALF_PROFILE_ALL_TO_ALL_STEPS` enable profiling windows
 - `eval/loss`, `eval/ppl`, `eval/maxvio_global`
 - `train/expert_activation/heatmap`, `eval/expert_activation/heatmap`
 

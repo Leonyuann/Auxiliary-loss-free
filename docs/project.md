@@ -192,9 +192,11 @@ The first evaluation should compare:
 - Language modeling loss.
 - Auxiliary loss and scaled auxiliary-loss contribution.
 - Learning rate and gradient norm.
-- Tokens per second.
-- Expert load variance.
-- Maximum expert load divided by minimum expert load.
+- Tokens per second plus `system/tokens_per_sec` and rolling throughput.
+- CUDA-event step time, rolling step time, and peak CUDA memory.
+- Expert load variance, max-over-mean, CV, and normalized entropy.
+- Overflow and dropped-token rates, currently zero until dispatcher counters are available.
+- Optional all-to-all profile time and ratio when profiling windows are enabled.
 - Router bias distribution.
 - Bias update policy behavior.
 - MaxVio_batch, rolling-100 MaxVio_batch, and validation MaxVio_global.

@@ -18,6 +18,7 @@ from alf.megatron_train import (
     _build_megatron_training_optimizer,
     _build_megatron_training_scheduler,
     _megatron_clip_grad,
+    _megatron_global_tokens,
     _post_megatron_optimizer_step,
     _step_megatron_optimizer,
     build_megatron_layer_spec,
@@ -237,6 +238,15 @@ def test_megatron_post_step_hooks_skip_when_optimizer_skips(monkeypatch) -> None
 
     assert events == 0
     assert scheduler.steps == 0
+
+
+def test_megatron_global_tokens_excludes_expert_parallel_duplicates() -> None:
+    """Megatron throughput tokens should scale by configured DP, not EP*DP."""
+
+    config = load_experiment_config("experiments/qwen3_moe_c4_1b_megatron_alf.py")
+
+    assert _megatron_global_tokens(14, config) == 28
+
 
 
 def test_c4_1b_megatron_shape_is_about_one_billion_parameters() -> None:

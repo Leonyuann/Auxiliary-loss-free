@@ -6,7 +6,6 @@ import importlib
 import json
 import math
 import os
-import time
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -19,13 +18,30 @@ from torch.utils.data.distributed import DistributedSampler
 
 from alf.config import ExperimentConfig, asdict, load_experiment_config, parse_config_args
 from alf.data import build_packed_text_dataset, causal_lm_collate
-from alf.metrics import append_jsonl
+from alf.metrics import (
+    activation_matrix_from_counts,
+    activation_rows_from_counts,
+    add_layer_counts,
+    append_jsonl,
+    collect_expert_load_counts,
+    collect_router_metrics,
+    mean_maxvio,
+    serialize_activation_matrix,
+)
+from alf.observability import (
+    AllToAllProfiler,
+    CudaStepTimer,
+    MovingAverage,
+    gpu_memory_metrics,
+    summarize_moe_observability,
+)
 from alf.megatron_router import (
     MegatronCoreAuxiliaryLossFreeTopKRouter,
     reset_megatron_alf_router_loads,
     update_megatron_alf_router_biases,
 )
 from alf.train import _build_optimizer, _build_scheduler, _clip_or_measure_gradient_norm
+from alf.wandb_logging import ExperimentLogger
 
 _INITIALIZED_DISTRIBUTED = False
 
@@ -346,73 +362,123 @@ def _run_megatron_training_loop(config: ExperimentConfig, output_dir: Path) -> N
     optimizer = _build_megatron_training_optimizer(model, config)
     scheduler = _build_megatron_training_scheduler(optimizer, config)
     metrics_path = output_dir / "metrics.jsonl"
+    logger = ExperimentLogger(
+        config.wandb if _is_global_rank_zero() else None,
+        experiment_name=config.name,
+        config=asdict(config),
+    )
+    step_timer = CudaStepTimer(device)
+    step_time_window = MovingAverage(window_size=100)
+    throughput_window = MovingAverage(window_size=100)
+    maxvio_window = MovingAverage(window_size=100)
+    all_to_all_profiler = AllToAllProfiler.from_env()
 
-    for step in range(config.training.max_steps):
-        if sampler is not None:
-            sampler.set_epoch(step)
-        if config.alf.enabled:
-            reset_megatron_alf_router_loads(metric_model)
-        optimizer.zero_grad(set_to_none=True)
-        if _is_megatron_ddp(model):
-            model.zero_grad_buffer()
-        step_start = time.perf_counter()
-        loss_total = 0.0
-        tokens = 0
-        for accumulation_index in range(config.training.gradient_accumulation_steps):
-            batch = next(data_iter)
-            input_ids, labels, position_ids, loss_mask, padding_mask = _prepare_megatron_batch(batch, device)
-            sync_context = (
-                model.no_sync()
-                if _is_megatron_ddp(model)
-                and accumulation_index < config.training.gradient_accumulation_steps - 1
-                else _nullcontext()
-            )
-            with sync_context:
-                losses = model(
-                    input_ids=input_ids,
-                    position_ids=position_ids,
-                    attention_mask=None,
-                    labels=labels,
-                    loss_mask=loss_mask,
-                    padding_mask=padding_mask,
+    try:
+        for step in range(config.training.max_steps):
+            if sampler is not None:
+                sampler.set_epoch(step)
+            step_number = step + 1
+            all_to_all_profiler.start(step_number)
+            step_timer.start()
+            if config.alf.enabled:
+                reset_megatron_alf_router_loads(metric_model)
+            optimizer.zero_grad(set_to_none=True)
+            if _is_megatron_ddp(model):
+                model.zero_grad_buffer()
+            loss_total = 0.0
+            tokens = 0
+            step_layer_counts: dict[str, torch.Tensor] = {}
+            for accumulation_index in range(config.training.gradient_accumulation_steps):
+                batch = next(data_iter)
+                input_ids, labels, position_ids, loss_mask, padding_mask = _prepare_megatron_batch(batch, device)
+                sync_context = (
+                    model.no_sync()
+                    if _is_megatron_ddp(model)
+                    and accumulation_index < config.training.gradient_accumulation_steps - 1
+                    else _nullcontext()
                 )
-                loss = losses.float().mean() / config.training.gradient_accumulation_steps
-                loss.backward()
-            loss_total += float(loss.detach().item())
-            tokens += int(input_ids.numel())
-        if _is_megatron_ddp(model):
-            model.finish_grad_sync()
-        optimizer_step_successful, grad_norm = _step_megatron_optimizer(
-            optimizer,
-            model,
-            config.training.max_grad_norm,
-        )
-        bias_update_events = _post_megatron_optimizer_step(
-            optimizer_step_successful,
-            metric_model,
-            scheduler,
-            alf_enabled=config.alf.enabled,
-        )
-        elapsed = max(time.perf_counter() - step_start, 1e-9)
-        tokens = _reduce_scalar(tokens, device, dtype=torch.long)
-        loss_total = _reduce_scalar(loss_total, device, dtype=torch.float32) / max(_world_size(), 1)
-        if _is_global_rank_zero() and ((step + 1) % config.training.log_every == 0 or step + 1 == config.training.max_steps):
-            append_jsonl(
-                metrics_path,
-                {
-                    "step": step + 1,
-                    "train": {
-                        "loss": loss_total,
-                        "learning_rate": float(scheduler.get_last_lr()[0]),
-                        "grad_norm": grad_norm,
-                        "tokens_per_second": tokens / elapsed,
-                        "bias_update_events": bias_update_events,
-                        "optimizer_step_successful": optimizer_step_successful,
-                    },
-                },
+                with sync_context:
+                    losses = model(
+                        input_ids=input_ids,
+                        position_ids=position_ids,
+                        attention_mask=None,
+                        labels=labels,
+                        loss_mask=loss_mask,
+                        padding_mask=padding_mask,
+                    )
+                    loss = losses.float().mean() / config.training.gradient_accumulation_steps
+                    loss.backward()
+                loss_total += float(loss.detach().item())
+                tokens += int(input_ids.numel())
+                add_layer_counts(step_layer_counts, collect_expert_load_counts(metric_model))
+            if _is_megatron_ddp(model):
+                model.finish_grad_sync()
+            optimizer_step_successful, grad_norm = _step_megatron_optimizer(
+                optimizer,
+                model,
+                config.training.max_grad_norm,
             )
-        if (step + 1) % config.training.save_every == 0 or step + 1 == config.training.max_steps:
-            _save_megatron_rank_checkpoint(output_dir, metric_model, optimizer, scheduler, step + 1, config)
+            bias_update_events = _post_megatron_optimizer_step(
+                optimizer_step_successful,
+                metric_model,
+                scheduler,
+                alf_enabled=config.alf.enabled,
+            )
+            step_time_ms = _reduce_max_scalar(step_timer.stop_ms(), device)
+            elapsed = max(step_time_ms / 1000.0, 1e-9)
+            profile_metrics = all_to_all_profiler.stop(step_time_ms)
+            global_tokens = _megatron_global_tokens(tokens, config)
+            loss_total = _reduce_scalar(loss_total, device, dtype=torch.float32) / max(_world_size(), 1)
+            maxvio_batch = mean_maxvio(step_layer_counts)
+            activation_matrix, activation_layers = activation_matrix_from_counts(step_layer_counts)
+            activation_matrix_json = serialize_activation_matrix(activation_matrix, activation_layers)
+            activation_rows = activation_rows_from_counts(step_layer_counts, step=step_number, split="train")
+            tokens_per_second = global_tokens / elapsed
+            system_metrics = _reduce_system_metrics(gpu_memory_metrics(device), device)
+            system_metrics.update(
+                {
+                    "step_time_ms": step_time_ms,
+                    "step_time_ms_rolling_100": step_time_window.update(step_time_ms),
+                    "tokens_per_sec": tokens_per_second,
+                    "tokens_per_sec_rolling_100": throughput_window.update(tokens_per_second),
+                }
+            )
+            record: dict[str, Any] = {
+                "step": step_number,
+                "train": {
+                    "loss": loss_total,
+                    "lm_loss": loss_total,
+                    "aux_loss": 0.0,
+                    "aux_loss_scaled": 0.0,
+                    "learning_rate": float(scheduler.get_last_lr()[0]),
+                    "grad_norm": grad_norm,
+                    "tokens_per_second": tokens_per_second,
+                    "maxvio_batch": maxvio_batch,
+                    "maxvio_batch_rolling_100": maxvio_window.update(maxvio_batch),
+                    "bias_update_events": bias_update_events,
+                    "optimizer_step_successful": optimizer_step_successful,
+                },
+                "system": system_metrics,
+                "moe": summarize_moe_observability(step_layer_counts),
+                "router": collect_router_metrics(metric_model),
+                "expert_activation": {
+                    "train": {
+                        "matrix": activation_matrix_json,
+                        "rows": activation_rows,
+                    }
+                },
+            }
+            if profile_metrics:
+                record["profile"] = profile_metrics
+            if _is_global_rank_zero() and (step_number % config.training.log_every == 0 or step_number == config.training.max_steps):
+                append_jsonl(metrics_path, record)
+                logger.log(record, step=step_number)
+                logger.log_expert_activation_heatmap("train/expert_activation", activation_matrix, step=step_number)
+                logger.log_expert_activation_table("train/expert_activation", activation_rows, step=step_number)
+            if step_number % config.training.save_every == 0 or step_number == config.training.max_steps:
+                _save_megatron_rank_checkpoint(output_dir, metric_model, optimizer, scheduler, step_number, config)
+    finally:
+        logger.finish()
 
 
 def _unwrap_megatron_model(model: torch.nn.Module) -> torch.nn.Module:
@@ -821,6 +887,51 @@ def _reduce_scalar(value: float | int, device: torch.device, dtype: torch.dtype)
     if dist.is_available() and dist.is_initialized():
         dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
     return float(tensor.item())
+
+
+def _reduce_max_scalar(value: float | int, device: torch.device) -> float:
+    """Reduce a scalar by max over all Megatron ranks.
+
+    Args:
+        value: Local scalar value.
+        device: Device for the temporary tensor.
+
+    Returns:
+        Maximum scalar value across ranks.
+    """
+
+    tensor = torch.tensor(float(value), device=device, dtype=torch.float64)
+    if dist.is_available() and dist.is_initialized():
+        dist.all_reduce(tensor, op=dist.ReduceOp.MAX)
+    return float(tensor.item())
+
+
+def _reduce_system_metrics(metrics: dict[str, float], device: torch.device) -> dict[str, float]:
+    """Reduce system metrics by max over all Megatron ranks.
+
+    Args:
+        metrics: Local system metric dictionary.
+        device: Device for collective tensors.
+
+    Returns:
+        Metrics reduced with max across ranks.
+    """
+
+    return {key: _reduce_max_scalar(value, device) for key, value in metrics.items()}
+
+
+def _megatron_global_tokens(local_tokens: int, config: ExperimentConfig) -> int:
+    """Return optimizer-step tokens excluding expert-parallel duplicates.
+
+    Args:
+        local_tokens: Tokens processed by one rank over the local accumulated step.
+        config: Loaded experiment configuration.
+
+    Returns:
+        Global tokens across configured data-parallel replicas.
+    """
+
+    return int(local_tokens) * int(config.megatron.data_parallel_size)
 
 
 def _world_size() -> int:

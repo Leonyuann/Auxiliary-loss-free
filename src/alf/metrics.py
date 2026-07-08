@@ -576,11 +576,18 @@ def summarize_tracked_router(module: nn.Module) -> dict[str, Any]:
         Serializable load summary.
     """
 
-    return {
-        "num_experts": int(getattr(module, "num_experts")),
-        "top_k": int(getattr(module, "top_k")),
-        "load": summarize_expert_load(counts=getattr(module, "last_expert_load")),
+    config = getattr(module, "config", None)
+    last_expert_load = getattr(module, "last_expert_load")
+    num_experts = getattr(module, "num_experts", getattr(config, "num_moe_experts", last_expert_load.numel()))
+    top_k = getattr(module, "top_k", getattr(config, "moe_router_topk", 0))
+    summary = {
+        "num_experts": int(num_experts),
+        "top_k": int(top_k),
+        "load": summarize_expert_load(counts=last_expert_load),
     }
+    if hasattr(module, "expert_bias"):
+        summary["bias"] = summarize_expert_bias(getattr(module, "expert_bias"))
+    return summary
 
 
 def load_balance_metrics(load: Tensor) -> dict[str, float]:
@@ -622,9 +629,11 @@ def collect_router_metrics(model: nn.Module) -> dict[str, Any]:
             router_summaries[module_name] = summarize_auxiliary_loss_free_router(module)
             aggregate_counts.append(module.last_expert_load.detach().cpu())
             aggregate_bias.append(module.expert_bias.detach().cpu())
-        elif hasattr(module, "last_expert_load") and hasattr(module, "num_experts") and hasattr(module, "top_k"):
+        elif hasattr(module, "last_expert_load"):
             router_summaries[module_name] = summarize_tracked_router(module)
             aggregate_counts.append(module.last_expert_load.detach().cpu())
+            if hasattr(module, "expert_bias"):
+                aggregate_bias.append(module.expert_bias.detach().cpu())
 
     metrics: dict[str, Any] = {
         "num_routers": len(router_summaries),
