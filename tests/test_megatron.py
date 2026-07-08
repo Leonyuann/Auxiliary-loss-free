@@ -17,6 +17,9 @@ from alf.megatron_train import (
     _build_megatron_sampler,
     _build_megatron_training_optimizer,
     _build_megatron_training_scheduler,
+    _megatron_clip_grad,
+    _post_megatron_optimizer_step,
+    _step_megatron_optimizer,
     build_megatron_layer_spec,
     megatron_effective_global_batch_size,
     megatron_parallel_world_size,
@@ -144,6 +147,7 @@ def test_megatron_ddp_optimizer_uses_torch_dtype_and_megatron_scheduler(monkeypa
     config.training.learning_rate = 0.01
     config.training.warmup_steps = 2
     config.training.scheduler_type = "constant"
+    config.training.max_grad_norm = None
 
     model = FakeMegatronDdp()
     optimizer = _build_megatron_training_optimizer(model, config)
@@ -153,6 +157,7 @@ def test_megatron_ddp_optimizer_uses_torch_dtype_and_megatron_scheduler(monkeypa
     assert captured["config"].fp16 is False
     assert captured["config"].params_dtype is torch.bfloat16
     assert captured["config"].use_distributed_optimizer is config.megatron.distributed_optimizer
+    assert captured["config"].clip_grad == 0.0
     assert captured["model_chunks"] == [model]
     assert captured["use_gloo_process_groups"] is False
     assert scheduler.__class__.__name__ == "MegatronLearningRateScheduler"
@@ -160,6 +165,78 @@ def test_megatron_ddp_optimizer_uses_torch_dtype_and_megatron_scheduler(monkeypa
     scheduler.step()
     assert scheduler.get_last_lr() == [0.01]
     assert optimizer.param_groups[0]["lr"] == 0.01
+
+
+def test_megatron_clip_grad_normalizes_disabled_values() -> None:
+    """Megatron clip config should preserve DDP disabled-clipping semantics."""
+
+    assert _megatron_clip_grad(None) == 0.0
+    assert _megatron_clip_grad(0.0) == 0.0
+    assert _megatron_clip_grad(-1.0) == 0.0
+    assert _megatron_clip_grad(1.5) == 1.5
+
+
+def test_megatron_optimizer_skip_reports_no_actual_step() -> None:
+    """Megatron optimizer overflow/skip should be visible to post-step hooks."""
+
+    class FakeSkippedMegatronOptimizer:
+        """Fake Megatron optimizer returning a skipped step result."""
+
+        def get_loss_scale(self) -> torch.Tensor:
+            """Expose the Megatron optimizer marker used by the training loop."""
+
+            return torch.tensor([1.0])
+
+        def step(self) -> tuple[bool, float, int]:
+            """Return Megatron's skipped-step tuple."""
+
+            return False, 7.5, 0
+
+    step_successful, grad_norm = _step_megatron_optimizer(
+        FakeSkippedMegatronOptimizer(),
+        torch.nn.Linear(1, 1),
+        max_grad_norm=1.0,
+    )
+
+    assert step_successful is False
+    assert grad_norm == 7.5
+
+
+def test_megatron_post_step_hooks_skip_when_optimizer_skips(monkeypatch) -> None:
+    """ALF bias and scheduler should advance only after actual optimizer steps."""
+
+    class FakeScheduler:
+        """Fake scheduler that records step calls."""
+
+        def __init__(self) -> None:
+            """Initialize call counter."""
+
+            self.steps = 0
+
+        def step(self) -> None:
+            """Record a scheduler step."""
+
+            self.steps += 1
+
+    import alf.megatron_train as megatron_train
+
+    def fail_update(*args, **kwargs):
+        """Fail if ALF bias update is called on a skipped optimizer step."""
+
+        raise AssertionError("bias update should not run after skipped optimizer step")
+
+    monkeypatch.setattr(megatron_train, "update_megatron_alf_router_biases", fail_update)
+    scheduler = FakeScheduler()
+
+    events = _post_megatron_optimizer_step(
+        False,
+        torch.nn.Linear(1, 1),
+        scheduler,
+        alf_enabled=True,
+    )
+
+    assert events == 0
+    assert scheduler.steps == 0
 
 
 def test_c4_1b_megatron_shape_is_about_one_billion_parameters() -> None:

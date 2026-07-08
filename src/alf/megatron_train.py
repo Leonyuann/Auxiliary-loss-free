@@ -382,9 +382,17 @@ def _run_megatron_training_loop(config: ExperimentConfig, output_dir: Path) -> N
             tokens += int(input_ids.numel())
         if _is_megatron_ddp(model):
             model.finish_grad_sync()
-        grad_norm = _step_megatron_optimizer(optimizer, model, config.training.max_grad_norm)
-        bias_update_events = update_megatron_alf_router_biases(metric_model) if config.alf.enabled else 0
-        scheduler.step()
+        optimizer_step_successful, grad_norm = _step_megatron_optimizer(
+            optimizer,
+            model,
+            config.training.max_grad_norm,
+        )
+        bias_update_events = _post_megatron_optimizer_step(
+            optimizer_step_successful,
+            metric_model,
+            scheduler,
+            alf_enabled=config.alf.enabled,
+        )
         elapsed = max(time.perf_counter() - step_start, 1e-9)
         tokens = _reduce_scalar(tokens, device, dtype=torch.long)
         loss_total = _reduce_scalar(loss_total, device, dtype=torch.float32) / max(_world_size(), 1)
@@ -399,6 +407,7 @@ def _run_megatron_training_loop(config: ExperimentConfig, output_dir: Path) -> N
                         "grad_norm": grad_norm,
                         "tokens_per_second": tokens / elapsed,
                         "bias_update_events": bias_update_events,
+                        "optimizer_step_successful": optimizer_step_successful,
                     },
                 },
             )
@@ -482,9 +491,24 @@ def _build_megatron_training_optimizer(model: torch.nn.Module, config: Experimen
         fp16=config.model.torch_dtype.lower() in {"float16", "fp16"},
         params_dtype=_torch_dtype(config.model.torch_dtype),
         use_distributed_optimizer=config.megatron.distributed_optimizer,
-        clip_grad=config.training.max_grad_norm,
+        clip_grad=_megatron_clip_grad(config.training.max_grad_norm),
     )
     return get_megatron_optimizer(optimizer_config, [model], use_gloo_process_groups=False)
+
+
+def _megatron_clip_grad(max_grad_norm: float | None) -> float:
+    """Normalize clipping config for Megatron optimizers.
+
+    Args:
+        max_grad_norm: Optional maximum gradient norm.
+
+    Returns:
+        Positive clipping threshold, or ``0.0`` when clipping is disabled.
+    """
+
+    if max_grad_norm is None or max_grad_norm <= 0:
+        return 0.0
+    return float(max_grad_norm)
 
 
 def _build_megatron_training_scheduler(optimizer: Any, config: ExperimentConfig) -> Any:
@@ -627,8 +651,34 @@ class MegatronLearningRateScheduler:
             group["lr"] = learning_rate
 
 
-def _step_megatron_optimizer(optimizer: Any, model: torch.nn.Module, max_grad_norm: float) -> float:
-    """Apply one optimizer step and return a scalar gradient norm.
+def _post_megatron_optimizer_step(
+    optimizer_step_successful: bool,
+    metric_model: torch.nn.Module,
+    scheduler: Any,
+    *,
+    alf_enabled: bool,
+) -> int:
+    """Run post-step hooks only after a real optimizer update.
+
+    Args:
+        optimizer_step_successful: Whether the optimizer actually updated parameters.
+        metric_model: Unwrapped model used for ALF router inspection.
+        scheduler: Learning-rate scheduler to advance after successful updates.
+        alf_enabled: Whether ALF router bias updates are enabled.
+
+    Returns:
+        Number of ALF bias update events applied.
+    """
+
+    if not optimizer_step_successful:
+        return 0
+    bias_update_events = update_megatron_alf_router_biases(metric_model) if alf_enabled else 0
+    scheduler.step()
+    return bias_update_events
+
+
+def _step_megatron_optimizer(optimizer: Any, model: torch.nn.Module, max_grad_norm: float | None) -> tuple[bool, float]:
+    """Apply one optimizer step and report whether parameters were updated.
 
     Args:
         optimizer: Torch or Megatron optimizer.
@@ -636,18 +686,20 @@ def _step_megatron_optimizer(optimizer: Any, model: torch.nn.Module, max_grad_no
         max_grad_norm: Maximum norm for torch optimizers.
 
     Returns:
-        Measured or clipped gradient norm.
+        Tuple of optimizer-step success and measured or clipped gradient norm.
     """
 
     if not hasattr(optimizer, "get_loss_scale"):
         grad_norm = _clip_or_measure_gradient_norm(model, max_grad_norm)
         optimizer.step()
-        return grad_norm
+        return True, grad_norm
 
     step_result = optimizer.step()
-    if isinstance(step_result, tuple) and len(step_result) >= 2 and step_result[1] is not None:
-        return float(step_result[1])
-    return 0.0
+    if isinstance(step_result, tuple):
+        step_successful = bool(step_result[0]) if len(step_result) >= 1 else True
+        grad_norm = float(step_result[1]) if len(step_result) >= 2 and step_result[1] is not None else 0.0
+        return step_successful, grad_norm
+    return True, 0.0
 
 
 def _prepare_megatron_batch(

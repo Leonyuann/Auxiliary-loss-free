@@ -250,3 +250,15 @@ Verification:
 - env PYTHONPATH=src uv run python -m py_compile src/alf/megatron_train.py tests/test_megatron.py
 - env PYTHONPATH=src uv run pytest tests/test_megatron.py
 - env PYTHONPATH=src uv run pytest passed with 74 tests.
+
+## 2026-07-08 - Fix Megatron optimizer skip semantics
+- Confirmed Megatron optimizer skipped updates were still advancing ALF bias and the learning-rate scheduler.
+- Changed the Megatron optimizer step helper to return update success plus grad norm, and gated ALF bias updates and scheduler steps on successful optimizer updates only.
+- Normalized Megatron `clip_grad` so `None` and non-positive `max_grad_norm` disable clipping with `0.0`, matching the DDP training helper semantics.
+- Added regressions for disabled clipping, skipped Megatron optimizer steps, and skipped post-step hooks.
+
+Verification:
+- bash -n scripts/run_c4_1b_megatron_8xa100.sh
+- env PYTHONPATH=src uv run python -m py_compile src/alf/megatron_train.py tests/test_megatron.py
+- env PYTHONPATH=src uv run pytest tests/test_megatron.py
+- env PYTHONPATH=src uv run pytest passed with 77 tests.
