@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import math
 import os
 import time
 from functools import partial
@@ -343,13 +344,7 @@ def _run_megatron_training_loop(config: ExperimentConfig, output_dir: Path) -> N
     )
     data_iter = _cycle(loader)
     optimizer = _build_megatron_training_optimizer(model, config)
-    scheduler = _build_scheduler(
-        optimizer,
-        config.training.learning_rate,
-        config.training.warmup_steps,
-        max_steps=config.training.max_steps,
-        scheduler_type=config.training.scheduler_type,
-    )
+    scheduler = _build_megatron_training_scheduler(optimizer, config)
     metrics_path = output_dir / "metrics.jsonl"
 
     for step in range(config.training.max_steps):
@@ -483,13 +478,153 @@ def _build_megatron_training_optimizer(model: torch.nn.Module, config: Experimen
         adam_beta1=0.9,
         adam_beta2=0.999,
         adam_eps=1e-8,
-        bf16=config.model.dtype == "bfloat16",
-        fp16=config.model.dtype == "float16",
-        params_dtype=_torch_dtype(config.model.dtype),
+        bf16=config.model.torch_dtype.lower() in {"bfloat16", "bf16"},
+        fp16=config.model.torch_dtype.lower() in {"float16", "fp16"},
+        params_dtype=_torch_dtype(config.model.torch_dtype),
         use_distributed_optimizer=config.megatron.distributed_optimizer,
         clip_grad=config.training.max_grad_norm,
     )
     return get_megatron_optimizer(optimizer_config, [model], use_gloo_process_groups=False)
+
+
+def _build_megatron_training_scheduler(optimizer: Any, config: ExperimentConfig) -> Any:
+    """Build the LR scheduler used by the Megatron training loop.
+
+    Args:
+        optimizer: Torch optimizer or Megatron optimizer.
+        config: Loaded experiment configuration.
+
+    Returns:
+        Scheduler object exposing ``step`` and ``get_last_lr``.
+    """
+
+    if hasattr(optimizer, "get_loss_scale"):
+        return MegatronLearningRateScheduler(
+            optimizer,
+            learning_rate=config.training.learning_rate,
+            warmup_steps=config.training.warmup_steps,
+            max_steps=config.training.max_steps,
+            scheduler_type=config.training.scheduler_type,
+        )
+    return _build_scheduler(
+        optimizer,
+        config.training.learning_rate,
+        config.training.warmup_steps,
+        max_steps=config.training.max_steps,
+        scheduler_type=config.training.scheduler_type,
+    )
+
+
+class MegatronLearningRateScheduler:
+    """Minimal LR scheduler for Megatron optimizers.
+
+    Attributes:
+        optimizer: Megatron optimizer with torch-style ``param_groups``.
+        learning_rate: Peak learning rate.
+        warmup_steps: Number of warmup steps.
+        max_steps: Total scheduled steps.
+        scheduler_type: Normalized scheduler type.
+        last_step: Number of completed scheduler steps.
+        last_lr: Most recently applied learning rate.
+    """
+
+    def __init__(
+        self,
+        optimizer: Any,
+        *,
+        learning_rate: float,
+        warmup_steps: int,
+        max_steps: int,
+        scheduler_type: str,
+    ) -> None:
+        """Initialize and apply the step-zero Megatron learning rate.
+
+        Args:
+            optimizer: Megatron optimizer with ``param_groups``.
+            learning_rate: Peak learning rate.
+            warmup_steps: Number of warmup steps.
+            max_steps: Total scheduled steps.
+            scheduler_type: Scheduler type, ``constant`` or ``cosine``.
+
+        Raises:
+            ValueError: If the scheduler type is unsupported.
+        """
+
+        normalized_type = scheduler_type.lower().replace("-", "_")
+        if normalized_type not in {"constant", "cosine", "cosine_annealing"}:
+            raise ValueError(f"Unsupported scheduler_type: {scheduler_type!r}")
+        self.optimizer = optimizer
+        self.learning_rate = float(learning_rate)
+        self.warmup_steps = int(warmup_steps)
+        self.max_steps = int(max_steps)
+        self.scheduler_type = normalized_type
+        self.last_step = 0
+        self.last_lr = self._lr_for_step(0)
+        self._apply_lr(self.last_lr)
+
+    def step(self) -> None:
+        """Advance one scheduler step and apply the new learning rate."""
+
+        self.last_step += 1
+        self.last_lr = self._lr_for_step(self.last_step)
+        self._apply_lr(self.last_lr)
+
+    def get_last_lr(self) -> list[float]:
+        """Return the latest learning rate in torch scheduler format.
+
+        Returns:
+            Single-element list containing the latest LR.
+        """
+
+        return [self.last_lr]
+
+    def state_dict(self) -> dict[str, Any]:
+        """Return serializable scheduler state.
+
+        Returns:
+            Scheduler state dictionary.
+        """
+
+        return {"last_step": self.last_step, "last_lr": self.last_lr}
+
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
+        """Restore scheduler state and reapply the stored learning rate.
+
+        Args:
+            state_dict: State produced by ``state_dict``.
+        """
+
+        self.last_step = int(state_dict.get("last_step", 0))
+        self.last_lr = float(state_dict.get("last_lr", self._lr_for_step(self.last_step)))
+        self._apply_lr(self.last_lr)
+
+    def _lr_for_step(self, step: int) -> float:
+        """Return the learning rate for a zero-based scheduler step.
+
+        Args:
+            step: Scheduler step index.
+
+        Returns:
+            Scheduled learning rate.
+        """
+
+        if self.warmup_steps > 0 and step < self.warmup_steps:
+            return self.learning_rate * float(step + 1) / float(self.warmup_steps)
+        if self.scheduler_type == "constant":
+            return self.learning_rate
+        decay_steps = max(1, self.max_steps - self.warmup_steps)
+        progress = min(1.0, max(0.0, float(step - self.warmup_steps + 1) / float(decay_steps)))
+        return self.learning_rate * 0.5 * (1.0 + math.cos(math.pi * progress))
+
+    def _apply_lr(self, learning_rate: float) -> None:
+        """Set all optimizer parameter-group learning rates.
+
+        Args:
+            learning_rate: LR to write into every parameter group.
+        """
+
+        for group in self.optimizer.param_groups:
+            group["lr"] = learning_rate
 
 
 def _step_megatron_optimizer(optimizer: Any, model: torch.nn.Module, max_grad_norm: float) -> float:

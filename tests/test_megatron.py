@@ -15,6 +15,8 @@ from alf.megatron_router import (
 from alf.megatron_train import (
     estimate_moe_total_parameters,
     _build_megatron_sampler,
+    _build_megatron_training_optimizer,
+    _build_megatron_training_scheduler,
     build_megatron_layer_spec,
     megatron_effective_global_batch_size,
     megatron_parallel_world_size,
@@ -94,6 +96,70 @@ def test_megatron_sampler_uses_expert_data_parallel_domain(monkeypatch) -> None:
 
     assert sampler.num_replicas == 2
     assert sampler.rank == 1
+
+
+def test_megatron_ddp_optimizer_uses_torch_dtype_and_megatron_scheduler(monkeypatch) -> None:
+    """Megatron-DDP optimizer branch should use torch_dtype and avoid LambdaLR."""
+
+    import megatron.core.optimizer as megatron_optimizer
+
+    captured = {}
+
+    class FakeMegatronDdp:
+        """Minimal object exposing Megatron DDP marker methods."""
+
+        def zero_grad_buffer(self) -> None:
+            """Fake buffer reset."""
+
+        def finish_grad_sync(self) -> None:
+            """Fake gradient sync."""
+
+        def no_sync(self) -> None:
+            """Fake no-sync context factory."""
+
+    class FakeMegatronOptimizer:
+        """Minimal Megatron optimizer facade for scheduler construction."""
+
+        def __init__(self) -> None:
+            """Create a torch-like param group list."""
+
+            self.param_groups = [{"lr": 0.0}]
+
+        def get_loss_scale(self) -> torch.Tensor:
+            """Expose the Megatron optimizer marker used by the training loop."""
+
+            return torch.tensor([1.0])
+
+    def fake_get_megatron_optimizer(config, model_chunks, use_gloo_process_groups=True):
+        """Capture Megatron optimizer arguments and return a fake optimizer."""
+
+        captured["config"] = config
+        captured["model_chunks"] = model_chunks
+        captured["use_gloo_process_groups"] = use_gloo_process_groups
+        return FakeMegatronOptimizer()
+
+    monkeypatch.setattr(megatron_optimizer, "get_megatron_optimizer", fake_get_megatron_optimizer)
+    config = load_experiment_config("experiments/qwen3_moe_c4_1b_megatron_alf.py")
+    config.model.torch_dtype = "bfloat16"
+    config.training.learning_rate = 0.01
+    config.training.warmup_steps = 2
+    config.training.scheduler_type = "constant"
+
+    model = FakeMegatronDdp()
+    optimizer = _build_megatron_training_optimizer(model, config)
+    scheduler = _build_megatron_training_scheduler(optimizer, config)
+
+    assert captured["config"].bf16 is True
+    assert captured["config"].fp16 is False
+    assert captured["config"].params_dtype is torch.bfloat16
+    assert captured["config"].use_distributed_optimizer is config.megatron.distributed_optimizer
+    assert captured["model_chunks"] == [model]
+    assert captured["use_gloo_process_groups"] is False
+    assert scheduler.__class__.__name__ == "MegatronLearningRateScheduler"
+    assert optimizer.param_groups[0]["lr"] == 0.005
+    scheduler.step()
+    assert scheduler.get_last_lr() == [0.01]
+    assert optimizer.param_groups[0]["lr"] == 0.01
 
 
 def test_c4_1b_megatron_shape_is_about_one_billion_parameters() -> None:

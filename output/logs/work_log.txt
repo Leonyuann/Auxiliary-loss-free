@@ -238,3 +238,15 @@ Verification:
 - env PYTHONPATH=src uv run python -m py_compile src/alf/megatron_train.py src/alf/megatron_router.py tests/test_megatron.py
 - env PYTHONPATH=src uv run pytest tests/test_megatron.py
 - env PYTHONPATH=src uv run pytest passed with 73 tests.
+
+## 2026-07-08 - Fix Megatron optimizer scheduler branch
+- Confirmed the Megatron-DDP optimizer branch used the nonexistent `model.dtype` field and would fail before training.
+- Switched Megatron optimizer config construction to `model.torch_dtype` for BF16/FP16 flags and parameter dtype.
+- Added a Megatron-specific learning-rate scheduler facade because MegatronOptimizer is not a `torch.optim.Optimizer` and cannot be passed to `LambdaLR`.
+- Added a fake Megatron-DDP regression that covers optimizer config construction and scheduler selection.
+
+Verification:
+- bash -n scripts/run_c4_1b_megatron_8xa100.sh
+- env PYTHONPATH=src uv run python -m py_compile src/alf/megatron_train.py tests/test_megatron.py
+- env PYTHONPATH=src uv run pytest tests/test_megatron.py
+- env PYTHONPATH=src uv run pytest passed with 74 tests.
