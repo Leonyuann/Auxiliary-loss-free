@@ -100,10 +100,12 @@ RUN_ALF=1 RUN_EMA=0 RUN_AUX=0 MAX_STEPS=10 bash scripts/run_c4_1b_megatron_8xa10
 
 The Megatron entry point validates the 8-GPU topology, initializes Megatron
 model-parallel groups, builds the Megatron GPT/MoE model, and runs a minimal
-training loop with data-parallel DDP, optimizer-step ALF bias updates, JSONL
-metrics, and per-rank checkpoint shards. The current environment has not run the
-8xA100 acceptance smoke, so treat that hardware validation as the next required
-step before long experiments.
+training loop with Megatron Core DDP/optimizer so expert and non-expert
+gradients use the proper process groups. Data loading shards over the expert-data-parallel domain
+(DP=2 for the default EP=4 topology), and ALF load counts reduce over that same
+expert-DP domain before optimizer-step bias updates. The current environment has
+not run the 8xA100 acceptance smoke, so treat that hardware validation as the next
+required step before long experiments.
 
 ## W&B Observability
 

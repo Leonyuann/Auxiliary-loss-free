@@ -13,7 +13,6 @@ from typing import Any
 import torch
 import torch.distributed as dist
 from torch.nn import functional as F
-from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
@@ -127,6 +126,13 @@ def validate_megatron_config(config: ExperimentConfig) -> None:
         raise ValueError(
             "megatron.global_batch_size must be divisible by "
             "data_parallel_size * micro_batch_size."
+        )
+    implied_global_batch_size = megatron_effective_global_batch_size(config)
+    if implied_global_batch_size != megatron.global_batch_size:
+        raise ValueError(
+            "training.gradient_accumulation_steps must make "
+            "micro_batch_size * data_parallel_size * gradient_accumulation_steps "
+            f"equal megatron.global_batch_size; got {implied_global_batch_size} and {megatron.global_batch_size}."
         )
 
 
@@ -301,15 +307,22 @@ def _run_megatron_training_loop(config: ExperimentConfig, output_dir: Path) -> N
     model = build_megatron_gpt_model(config).to(device)
     model.train()
     if dist.is_available() and dist.is_initialized():
-        ddp_group = parallel_state.get_data_parallel_group(with_context_parallel=True)
-        model = DistributedDataParallel(
-            model,
-            device_ids=[device.index] if device.type == "cuda" else None,
-            process_group=ddp_group,
-            broadcast_buffers=False,
-            find_unused_parameters=False,
+        from megatron.core.distributed import (
+            DistributedDataParallel as MegatronDistributedDataParallel,
+            DistributedDataParallelConfig,
         )
-    metric_model = model.module if isinstance(model, DistributedDataParallel) else model
+
+        ddp_config = DistributedDataParallelConfig(
+            grad_reduce_in_fp32=True,
+            overlap_grad_reduce=False,
+            use_distributed_optimizer=config.megatron.distributed_optimizer,
+        )
+        model = MegatronDistributedDataParallel(
+            config=model.config,
+            ddp_config=ddp_config,
+            module=model,
+        )
+    metric_model = _unwrap_megatron_model(model)
 
     dataset = build_packed_text_dataset(
         tokenizer=None,
@@ -329,12 +342,7 @@ def _run_megatron_training_loop(config: ExperimentConfig, output_dir: Path) -> N
         drop_last=config.training.drop_last,
     )
     data_iter = _cycle(loader)
-    optimizer = _build_optimizer(
-        model,
-        learning_rate=config.training.learning_rate,
-        weight_decay=config.training.weight_decay,
-        optimizer_state_dtype=config.training.optimizer_state_dtype,
-    )
+    optimizer = _build_megatron_training_optimizer(model, config)
     scheduler = _build_scheduler(
         optimizer,
         config.training.learning_rate,
@@ -350,6 +358,8 @@ def _run_megatron_training_loop(config: ExperimentConfig, output_dir: Path) -> N
         if config.alf.enabled:
             reset_megatron_alf_router_loads(metric_model)
         optimizer.zero_grad(set_to_none=True)
+        if _is_megatron_ddp(model):
+            model.zero_grad_buffer()
         step_start = time.perf_counter()
         loss_total = 0.0
         tokens = 0
@@ -358,7 +368,7 @@ def _run_megatron_training_loop(config: ExperimentConfig, output_dir: Path) -> N
             input_ids, labels, position_ids, loss_mask, padding_mask = _prepare_megatron_batch(batch, device)
             sync_context = (
                 model.no_sync()
-                if isinstance(model, DistributedDataParallel)
+                if _is_megatron_ddp(model)
                 and accumulation_index < config.training.gradient_accumulation_steps - 1
                 else _nullcontext()
             )
@@ -375,8 +385,9 @@ def _run_megatron_training_loop(config: ExperimentConfig, output_dir: Path) -> N
                 loss.backward()
             loss_total += float(loss.detach().item())
             tokens += int(input_ids.numel())
-        grad_norm = _clip_or_measure_gradient_norm(model, config.training.max_grad_norm)
-        optimizer.step()
+        if _is_megatron_ddp(model):
+            model.finish_grad_sync()
+        grad_norm = _step_megatron_optimizer(optimizer, model, config.training.max_grad_norm)
         bias_update_events = update_megatron_alf_router_biases(metric_model) if config.alf.enabled else 0
         scheduler.step()
         elapsed = max(time.perf_counter() - step_start, 1e-9)
@@ -398,6 +409,110 @@ def _run_megatron_training_loop(config: ExperimentConfig, output_dir: Path) -> N
             )
         if (step + 1) % config.training.save_every == 0 or step + 1 == config.training.max_steps:
             _save_megatron_rank_checkpoint(output_dir, metric_model, optimizer, scheduler, step + 1, config)
+
+
+def _unwrap_megatron_model(model: torch.nn.Module) -> torch.nn.Module:
+    """Return the wrapped Megatron module when using Megatron DDP.
+
+    Args:
+        model: Plain or Megatron DDP-wrapped model.
+
+    Returns:
+        The underlying model module.
+    """
+
+    return getattr(model, "module", model)
+
+
+def _is_megatron_ddp(model: torch.nn.Module) -> bool:
+    """Return whether a module is Megatron Core DDP-wrapped.
+
+    Args:
+        model: Module to inspect.
+
+    Returns:
+        Whether the module exposes Megatron DDP synchronization methods.
+    """
+
+    return all(hasattr(model, name) for name in ("zero_grad_buffer", "finish_grad_sync", "no_sync"))
+
+
+def megatron_effective_global_batch_size(config: ExperimentConfig) -> int:
+    """Return the optimizer-step sample count implied by Megatron data loading.
+
+    Args:
+        config: Loaded experiment configuration.
+
+    Returns:
+        Micro batch times gradient accumulation times configured DP replicas.
+    """
+
+    return (
+        config.megatron.micro_batch_size
+        * config.training.gradient_accumulation_steps
+        * config.megatron.data_parallel_size
+    )
+
+
+def _build_megatron_training_optimizer(model: torch.nn.Module, config: ExperimentConfig) -> Any:
+    """Build an optimizer compatible with the Megatron training wrapper.
+
+    Args:
+        model: Plain model for single-process runs or Megatron DDP-wrapped model.
+        config: Loaded experiment configuration.
+
+    Returns:
+        A Megatron Core optimizer for Megatron DDP, otherwise the existing torch optimizer.
+    """
+
+    if not _is_megatron_ddp(model):
+        return _build_optimizer(
+            model,
+            learning_rate=config.training.learning_rate,
+            weight_decay=config.training.weight_decay,
+            optimizer_state_dtype=config.training.optimizer_state_dtype,
+        )
+
+    from megatron.core.optimizer import OptimizerConfig, get_megatron_optimizer
+
+    optimizer_config = OptimizerConfig(
+        optimizer="adam",
+        lr=config.training.learning_rate,
+        min_lr=0.0,
+        weight_decay=config.training.weight_decay,
+        adam_beta1=0.9,
+        adam_beta2=0.999,
+        adam_eps=1e-8,
+        bf16=config.model.dtype == "bfloat16",
+        fp16=config.model.dtype == "float16",
+        params_dtype=_torch_dtype(config.model.dtype),
+        use_distributed_optimizer=config.megatron.distributed_optimizer,
+        clip_grad=config.training.max_grad_norm,
+    )
+    return get_megatron_optimizer(optimizer_config, [model], use_gloo_process_groups=False)
+
+
+def _step_megatron_optimizer(optimizer: Any, model: torch.nn.Module, max_grad_norm: float) -> float:
+    """Apply one optimizer step and return a scalar gradient norm.
+
+    Args:
+        optimizer: Torch or Megatron optimizer.
+        model: Model whose gradients may need torch-side clipping.
+        max_grad_norm: Maximum norm for torch optimizers.
+
+    Returns:
+        Measured or clipped gradient norm.
+    """
+
+    if not hasattr(optimizer, "get_loss_scale"):
+        grad_norm = _clip_or_measure_gradient_norm(model, max_grad_norm)
+        optimizer.step()
+        return grad_norm
+
+    step_result = optimizer.step()
+    if isinstance(step_result, tuple) and len(step_result) >= 2 and step_result[1] is not None:
+        return float(step_result[1])
+    return 0.0
 
 
 def _prepare_megatron_batch(
@@ -441,8 +556,8 @@ def _build_megatron_sampler(dataset: Any, config: ExperimentConfig) -> Distribut
 
     return DistributedSampler(
         dataset,
-        num_replicas=parallel_state.get_data_parallel_world_size(with_context_parallel=True),
-        rank=parallel_state.get_data_parallel_rank(with_context_parallel=True),
+        num_replicas=parallel_state.get_expert_data_parallel_world_size(),
+        rank=parallel_state.get_expert_data_parallel_rank(),
         shuffle=True,
         seed=config.training.seed,
         drop_last=config.training.drop_last,

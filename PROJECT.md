@@ -193,9 +193,9 @@ Delivered so far:
 - Added `MegatronConfig` and dotted override support through the existing config system.
 - Added 1B-family ALF, ALF-EMA, and auxiliary-loss Megatron experiment configs.
 - Added a scripted 8-GPU launch wrapper.
-- Added a Megatron-compatible ALF top-k router and explicit TP/CP/DP load reducer.
+- Added a Megatron-compatible ALF top-k router and expert-data-parallel load reducer.
 - Added Megatron config validation, transformer-config generation, and GPTModel construction helpers.
-- Added a minimal Megatron Core training loop with data-parallel DDP, optimizer-step ALF bias updates, metrics, and per-rank checkpoint shards.
+- Added a minimal Megatron Core training loop with Megatron Core DDP/optimizer, expert-data-parallel sampling, optimizer-step ALF bias updates, metrics, and per-rank checkpoint shards.
 
 Remaining work:
 

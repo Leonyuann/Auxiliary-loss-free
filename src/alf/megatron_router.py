@@ -169,7 +169,11 @@ if TopKRouter is not None:
                 **kwargs: Keyword arguments forwarded to Megatron ``TopKRouter``.
             """
 
+            pg_collection = kwargs.get("pg_collection")
+            if pg_collection is None and len(args) >= 2:
+                pg_collection = args[1]
             super().__init__(*args, **kwargs)
+            self.alf_load_group = getattr(pg_collection, "expt_dp", None) or self.tp_dp_cp_group
             self._install_alf_state(alf_config)
 
         def _install_alf_state(self, alf_config: Any | None) -> None:
@@ -263,7 +267,7 @@ if TopKRouter is not None:
 
             with torch.no_grad():
                 local_load = routing_map.sum(dim=0).to(device=self.last_expert_load.device, dtype=torch.long)
-                expert_load = reduce_expert_load_counts(local_load, self.tp_dp_cp_group) if self.training else local_load
+                expert_load = reduce_expert_load_counts(local_load, self.alf_load_group) if self.training else local_load
                 self._set_load_statistics(expert_load)
                 if self.training:
                     self.accumulated_expert_load.add_(

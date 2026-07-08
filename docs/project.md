@@ -221,11 +221,14 @@ places 6 experts on each expert-parallel rank.
 The project now has typed `MegatronConfig` fields, 1B ALF/ALF-EMA/aux-loss
 experiment configs, a scripted 8-GPU launch, and a Megatron-compatible ALF router
 that returns dense probability and routing-map tensors. ALF load counts are reduced
-only over an explicit TP/CP/DP process group so expert-parallel shards are not
-double-counted.
+over the expert-data-parallel group so expert-parallel shards are not double-counted
+when EP=4 and DP=2.
 
 `alf-megatron-train` now validates the topology, initializes Megatron Core
 model-parallel groups, builds the GPT/MoE model, runs a minimal forward/backward
-training loop, applies ALF bias updates after optimizer steps, and writes per-rank
-checkpoint shards. The 8xA100 acceptance smoke still needs to be run on the target
-host before treating the path as production-ready.
+training loop with Megatron Core DDP/optimizer, applies ALF bias updates after
+optimizer steps, and writes per-rank checkpoint shards. The batch validator enforces
+`micro_batch_size * gradient_accumulation_steps * data_parallel_size ==
+global_batch_size`, and the sampler shards over the expert-data-parallel domain.
+The 8xA100 acceptance smoke still needs to be run on the target host before
+treating the path as production-ready.

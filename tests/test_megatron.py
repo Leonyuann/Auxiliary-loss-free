@@ -14,7 +14,9 @@ from alf.megatron_router import (
 )
 from alf.megatron_train import (
     estimate_moe_total_parameters,
+    _build_megatron_sampler,
     build_megatron_layer_spec,
+    megatron_effective_global_batch_size,
     megatron_parallel_world_size,
     megatron_transformer_config_kwargs,
     validate_megatron_config,
@@ -41,7 +43,57 @@ def test_c4_1b_megatron_configs_use_ep4_dp2_top3_defaults() -> None:
         assert config.model.num_experts == 24
         assert config.model.num_experts_per_tok == 3
         assert config.model.num_experts // config.megatron.expert_model_parallel_size == 6
+        assert megatron_effective_global_batch_size(config) == config.megatron.global_batch_size == 16
         validate_megatron_config(config)
+
+
+def test_megatron_config_rejects_mismatched_effective_global_batch() -> None:
+    """Gradient accumulation should be derived from configured DP, not EP-expanded DP."""
+
+    config = load_experiment_config("experiments/qwen3_moe_c4_1b_megatron_alf.py")
+    config.training.gradient_accumulation_steps = 16
+
+    import pytest
+
+    with pytest.raises(ValueError, match="equal megatron.global_batch_size"):
+        validate_megatron_config(config)
+
+
+def test_megatron_sampler_uses_expert_data_parallel_domain(monkeypatch) -> None:
+    """Sampler should shard data over configured DP replicas, excluding EP shards."""
+
+    class FakeDist:
+        """Fake distributed state for sampler construction."""
+
+        @staticmethod
+        def is_available() -> bool:
+            """Return that distributed is available."""
+
+            return True
+
+        @staticmethod
+        def is_initialized() -> bool:
+            """Return that distributed is initialized."""
+
+            return True
+
+    import alf.megatron_train as megatron_train
+    from megatron.core import parallel_state
+
+    monkeypatch.setattr(megatron_train, "dist", FakeDist)
+    monkeypatch.setattr(parallel_state, "get_expert_data_parallel_world_size", lambda: 2)
+    monkeypatch.setattr(parallel_state, "get_expert_data_parallel_rank", lambda: 1)
+    monkeypatch.setattr(
+        parallel_state,
+        "get_data_parallel_world_size",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("ordinary DP should not be used")),
+    )
+
+    config = load_experiment_config("experiments/qwen3_moe_c4_1b_megatron_alf.py")
+    sampler = _build_megatron_sampler(list(range(8)), config)
+
+    assert sampler.num_replicas == 2
+    assert sampler.rank == 1
 
 
 def test_c4_1b_megatron_shape_is_about_one_billion_parameters() -> None:
@@ -136,6 +188,72 @@ def test_megatron_core_alf_router_uses_accumulated_ema_update() -> None:
     expected_ema = torch.tensor([-1 / 24, -1 / 24, 1 / 8, -1 / 24], device=router.load_error_ema.device)
     assert torch.allclose(router.load_error_ema, expected_ema)
     assert torch.allclose(router.last_bias_delta, router.load_error_ema)
+
+
+def test_megatron_core_alf_router_reduces_load_over_expert_dp(monkeypatch) -> None:
+    """Core router load counts should reduce over expert-DP, not ordinary TP/DP/CP."""
+
+    from megatron.core.transformer.transformer_config import TransformerConfig
+
+    class FakeReduceOp:
+        """Fake torch distributed reduce operation namespace."""
+
+        SUM = "sum"
+
+    class FakeDist:
+        """Fake distributed module validating the selected reduce group."""
+
+        ReduceOp = FakeReduceOp
+
+        @staticmethod
+        def is_available() -> bool:
+            """Return that distributed collectives are available."""
+
+            return True
+
+        @staticmethod
+        def is_initialized() -> bool:
+            """Return that distributed collectives are initialized."""
+
+            return True
+
+        @staticmethod
+        def all_reduce(tensor: torch.Tensor, op: str, group: object | None = None) -> None:
+            """Mark expert-DP reductions by adding an offset."""
+
+            assert op == "sum"
+            assert group == "expert_dp"
+            tensor.add_(10)
+
+    import alf.megatron_router as megatron_router
+
+    monkeypatch.setattr(megatron_router, "dist", FakeDist)
+    config = ExperimentConfig(
+        name="tiny-megatron-router",
+        model=ModelConfig(
+            hidden_size=2,
+            intermediate_size=4,
+            num_hidden_layers=1,
+            num_attention_heads=1,
+            num_key_value_heads=1,
+            num_experts=4,
+            num_experts_per_tok=3,
+        ),
+        megatron=MegatronConfig(enabled=True, expert_model_parallel_size=4, data_parallel_size=2),
+        alf=AlfConfig(enabled=True, bias_update_rate=0.0),
+    )
+    kwargs = megatron_transformer_config_kwargs(config)
+    kwargs["perform_initialization"] = False
+    router = MegatronCoreAuxiliaryLossFreeTopKRouter(
+        config=TransformerConfig(**kwargs),
+        pg_collection=SimpleNamespace(tp=None, cp=None, tp_cp="ordinary", tp_dp_cp="ordinary", expt_dp="expert_dp"),
+        alf_config=config.alf,
+    )
+
+    router.train()
+    router.routing(torch.tensor([[[4.0, 3.0, 2.0, 1.0]]], device=router.weight.device))
+
+    assert router.last_expert_load.cpu().tolist() == [11, 11, 11, 10]
 
 
 def test_megatron_alf_router_returns_top3_probability_map() -> None:

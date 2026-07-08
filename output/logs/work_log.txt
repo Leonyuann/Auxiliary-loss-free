@@ -225,3 +225,16 @@ Verification:
 - env PYTHONPATH=src uv run pytest tests/test_megatron.py
 - env PYTHONPATH=src uv run python -m alf.megatron_train experiments/qwen3_moe_c4_1b_megatron_alf.py --training.max_steps 1 --wandb.enabled false --training.output_dir /tmp/alf-megatron-no-torchrun-smoke raised the expected torchrun launch error.
 - env PYTHONPATH=src uv run pytest passed with 70 tests.
+
+## 2026-07-08 - Fix Megatron expert-parallel DP grouping
+- Confirmed the review findings: ordinary Megatron DP grouping included the EP dimension and would over-synchronize expert shards, over-count the configured global batch, and reduce ALF loads over the wrong domain.
+- Replaced the PyTorch DDP wrapper and torch optimizer with Megatron Core DDP/optimizer so expert and non-expert parameters use Megatron's separate gradient synchronization groups and gradient buffers.
+- Changed Megatron sampling to shard over expert-data-parallel rank/world size, keeping the default TP=1/PP=1/CP=1/EP=4/DP=2 effective batch at 16 samples per optimizer step.
+- Added validation for `micro_batch_size * gradient_accumulation_steps * data_parallel_size == global_batch_size`.
+- Changed Megatron ALF load accumulation to reduce over the expert-data-parallel group and added regressions for sampler domain, batch validation, and reducer group selection.
+
+Verification:
+- bash -n scripts/run_c4_1b_megatron_8xa100.sh
+- env PYTHONPATH=src uv run python -m py_compile src/alf/megatron_train.py src/alf/megatron_router.py tests/test_megatron.py
+- env PYTHONPATH=src uv run pytest tests/test_megatron.py
+- env PYTHONPATH=src uv run pytest passed with 73 tests.
