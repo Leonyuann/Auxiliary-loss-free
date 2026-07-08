@@ -186,3 +186,10 @@ Verification:
 - Updated committed C4 300M ALF/EMA cadence to `bias_update_schedule="constant"`, `update_interval=1`, and `warmup_steps=0` so bias updates run once per optimizer step.
 - Updated DDP helper tests to assert optimizer-step cadence instead of `gradient_accumulation_steps` cadence.
 - Verification: staged-index cadence assertions and `py_compile` for `tests/test_train_ddp_helpers.py` passed; temp clean-worktree pytest was interrupted because it started downloading a fresh CUDA dependency stack.
+
+## 2026-07-08 - Eval layer-wise normalized entropy
+- Added normalized entropy helpers for per-layer MoE expert utilization from expert assignment counts.
+- Logged eval entropy mean/min/max as scalars and per-layer entropy rows in JSONL/W&B tables.
+- Added metrics and training JSONL tests for entropy output.
+- Synchronized C4 300M helper tests with the current committed short-run configs.
+- Verification: `env PYTHONPATH=src uv run pytest` passed with 61 tests.

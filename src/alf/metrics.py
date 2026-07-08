@@ -114,6 +114,101 @@ def mean_maxvio(layer_counts: dict[str, Tensor]) -> float:
     return float(sum(compute_maxvio(counts) for counts in layer_counts.values()) / len(layer_counts))
 
 
+def compute_normalized_entropy(counts: Tensor) -> float:
+    """Compute normalized entropy from per-expert assignment counts.
+
+    Args:
+        counts: Per-expert activation counts for one MoE layer.
+
+    Returns:
+        Normalized entropy in `[0, 1]`. Returns zero when no assignments exist.
+    """
+
+    values = counts.detach().to(dtype=torch.float32, device="cpu")
+    total = float(values.sum().item())
+    num_experts = int(values.numel())
+    if num_experts == 0 or total == 0.0:
+        return 0.0
+    if num_experts == 1:
+        return 1.0
+    probabilities = values / total
+    nonzero_probabilities = probabilities[probabilities > 0.0]
+    entropy = -(nonzero_probabilities * nonzero_probabilities.log()).sum()
+    normalizer = torch.log(torch.tensor(float(num_experts), dtype=torch.float32))
+    return float((entropy / normalizer).clamp(0.0, 1.0).item())
+
+
+def layerwise_normalized_entropy(layer_counts: dict[str, Tensor]) -> dict[str, float]:
+    """Compute normalized entropy for each MoE layer.
+
+    Args:
+        layer_counts: Mapping from layer/router names to per-expert counts.
+
+    Returns:
+        Mapping from layer/router names to normalized entropy values.
+    """
+
+    return {
+        layer_name: compute_normalized_entropy(layer_counts[layer_name])
+        for layer_name in sorted(layer_counts, key=_layer_sort_key)
+    }
+
+
+def layerwise_normalized_entropy_rows(
+    layer_counts: dict[str, Tensor],
+    *,
+    step: int | None,
+    split: str,
+) -> list[dict[str, Any]]:
+    """Create table rows for per-layer normalized entropy.
+
+    Args:
+        layer_counts: Mapping from layer/router names to per-expert counts.
+        step: Optional training step.
+        split: Metric split name.
+
+    Returns:
+        JSON/W&B table rows.
+    """
+
+    rows: list[dict[str, Any]] = []
+    entropy_by_layer = layerwise_normalized_entropy(layer_counts)
+    for layer_index, layer_name in enumerate(entropy_by_layer):
+        counts = layer_counts[layer_name].detach().to(dtype=torch.float32, device="cpu")
+        rows.append(
+            {
+                "step": step,
+                "split": split,
+                "layer_index": layer_index,
+                "layer": layer_name,
+                "num_experts": int(counts.numel()),
+                "total_assignments": int(counts.sum().item()),
+                "normalized_entropy": entropy_by_layer[layer_name],
+            }
+        )
+    return rows
+
+
+def summarize_layerwise_normalized_entropy(layer_counts: dict[str, Tensor]) -> dict[str, float]:
+    """Summarize per-layer normalized entropy values.
+
+    Args:
+        layer_counts: Mapping from layer/router names to per-expert counts.
+
+    Returns:
+        Mean, min, and max normalized entropy across layers.
+    """
+
+    values = list(layerwise_normalized_entropy(layer_counts).values())
+    if not values:
+        return {"mean": 0.0, "min": 0.0, "max": 0.0}
+    return {
+        "mean": float(sum(values) / len(values)),
+        "min": float(min(values)),
+        "max": float(max(values)),
+    }
+
+
 def collect_expert_load_counts(model: nn.Module) -> dict[str, Tensor]:
     """Collect current per-layer expert load counts from tracked routers.
 
@@ -571,10 +666,14 @@ __all__ = [
     "collect_router_metrics",
     "compute_maxvio",
     "compute_expert_load_counts",
+    "compute_normalized_entropy",
+    "layerwise_normalized_entropy",
+    "layerwise_normalized_entropy_rows",
     "load_balance_metrics",
     "loss_breakdown",
     "mean_maxvio",
     "serialize_activation_matrix",
+    "summarize_layerwise_normalized_entropy",
     "summarize_auxiliary_loss_free_router",
     "summarize_expert_bias",
     "summarize_expert_load",

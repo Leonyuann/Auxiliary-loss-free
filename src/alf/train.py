@@ -418,6 +418,11 @@ def train(config_path: str | Path, overrides: list[str] | None = None) -> Path:
                                 "rows": eval_record["eval/expert_activation_rows"],
                             }
                         },
+                        "layerwise_normalized_entropy": {
+                            "eval": {
+                                "rows": eval_record["eval/layerwise_normalized_entropy_rows"],
+                            }
+                        },
                     }
                     append_jsonl(metrics_path, eval_json_record)
                     logger.log(eval_scalars, step=step)
@@ -429,6 +434,11 @@ def train(config_path: str | Path, overrides: list[str] | None = None) -> Path:
                     logger.log_expert_activation_table(
                         "eval/expert_activation",
                         eval_record["eval/expert_activation_rows"],
+                        step=step,
+                    )
+                    logger.log_expert_activation_table(
+                        "eval/layerwise_normalized_entropy",
+                        eval_record["eval/layerwise_normalized_entropy_rows"],
                         step=step,
                     )
                     eval_ppl = float(eval_record["eval/ppl"])

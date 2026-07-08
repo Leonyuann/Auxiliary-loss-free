@@ -15,8 +15,10 @@ from alf.metrics import (
     add_layer_counts,
     collect_expert_load_counts,
     loss_breakdown,
+    layerwise_normalized_entropy_rows,
     mean_maxvio,
     serialize_activation_matrix,
+    summarize_layerwise_normalized_entropy,
 )
 
 
@@ -86,6 +88,8 @@ def evaluate_model(
     denominator = max(total_tokens, 1)
     eval_loss = total_lm_loss / denominator
     matrix, layer_names = activation_matrix_from_counts(layer_counts)
+    entropy_summary = summarize_layerwise_normalized_entropy(layer_counts)
+    entropy_rows = layerwise_normalized_entropy_rows(layer_counts, step=None, split="eval")
     return {
         "eval/loss": eval_loss,
         "eval/ppl": math.exp(min(eval_loss, 20.0)),
@@ -93,9 +97,13 @@ def evaluate_model(
         "eval/aux_loss": total_aux_loss / denominator,
         "eval/aux_loss_scaled": total_aux_loss_scaled / denominator,
         "eval/maxvio_global": mean_maxvio(layer_counts),
+        "eval/layerwise_normalized_entropy_mean": entropy_summary["mean"],
+        "eval/layerwise_normalized_entropy_min": entropy_summary["min"],
+        "eval/layerwise_normalized_entropy_max": entropy_summary["max"],
         "eval/tokens": total_tokens,
         "eval/expert_activation_matrix": matrix,
         "eval/expert_activation_matrix_json": serialize_activation_matrix(matrix, layer_names),
         "eval/expert_activation_layers": layer_names,
         "eval/expert_activation_rows": activation_rows_from_counts(layer_counts, step=None, split="eval"),
+        "eval/layerwise_normalized_entropy_rows": entropy_rows,
     }

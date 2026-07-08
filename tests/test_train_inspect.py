@@ -144,10 +144,14 @@ def test_training_metrics_include_wandb_observability_keys(tmp_path: Path) -> No
     }
     assert eval_record["eval/ppl"] > 0.0
     assert eval_record["eval/maxvio_global"] >= 0.0
+    assert 0.0 <= eval_record["eval/layerwise_normalized_entropy_mean"] <= 1.0
+    assert 0.0 <= eval_record["eval/layerwise_normalized_entropy_min"] <= 1.0
+    assert 0.0 <= eval_record["eval/layerwise_normalized_entropy_max"] <= 1.0
     assert train_record["expert_activation"]["train"]["matrix"]["layers"]
     assert train_record["expert_activation"]["train"]["rows"]
     assert eval_record["expert_activation"]["eval"]["matrix"]["layers"]
     assert eval_record["expert_activation"]["eval"]["rows"]
+    assert eval_record["layerwise_normalized_entropy"]["eval"]["rows"]
 
 
 def test_alf_bias_updates_once_per_optimizer_step_with_accumulation(tmp_path: Path) -> None:

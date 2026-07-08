@@ -91,12 +91,13 @@ def test_c4_300m_configs_use_reasonable_moe_scale() -> None:
         assert config.model.num_key_value_heads == 4
         assert config.model.num_experts == 16
         assert config.model.num_experts_per_tok == 2
-        assert config.training.max_steps == 100_000
-        assert config.training.warmup_steps == 2000
+        assert config.training.max_steps == 20_000
+        assert config.training.warmup_steps == 800
         assert config.training.max_grad_norm == 1.0
-        assert config.model.router_aux_loss_coef == 0.001
-        assert config.training.optimizer_state_dtype in {"float32", "parameter"}
-        assert config.training.save_every in {2500, 10000}
+        expected_aux_coef = 0.005 if path.endswith("aux_loss.py") else 0.001
+        assert config.model.router_aux_loss_coef == expected_aux_coef
+        assert config.training.optimizer_state_dtype == "parameter"
+        assert config.training.save_every == 10000
         assert config.eval.eval_every == 1000
         assert config.eval.eval_batch_size == 32
 
@@ -118,8 +119,8 @@ def test_c4_alf_bias_update_cadence_is_stable_for_accumulation() -> None:
     assert sign_config.alf.bias_clip == 2.0
 
     assert ema_config.alf.bias_update_policy == "ema"
-    assert ema_config.alf.bias_update_rate == 1e-2
-    assert ema_config.alf.bias_ema_beta == 0.9
+    assert ema_config.alf.bias_update_rate == 1e-1
+    assert ema_config.alf.bias_ema_beta == 0.5
     assert ema_config.alf.bias_update_schedule in {"constant", "linear"}
     if ema_config.alf.bias_update_schedule == "linear":
         assert ema_config.alf.bias_update_end_rate == 1e-3

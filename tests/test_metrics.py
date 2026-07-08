@@ -11,6 +11,8 @@ from alf.metrics import (
     collect_bias_update_deltas,
     collect_bias_update_steps,
     compute_maxvio,
+    compute_normalized_entropy,
+    layerwise_normalized_entropy_rows,
     load_balance_metrics,
     mean_maxvio,
 )
@@ -34,6 +36,31 @@ def test_compute_maxvio_for_balanced_and_unbalanced_counts() -> None:
     assert compute_maxvio(torch.tensor([4, 4, 4, 4])) == 0.0
     assert compute_maxvio(torch.tensor([8, 4, 4, 0])) == 1.0
     assert compute_maxvio(torch.tensor([0, 0, 0, 0])) == 0.0
+
+
+def test_layerwise_normalized_entropy_from_counts() -> None:
+    """Compute normalized entropy for balanced and concentrated expert use."""
+
+    counts = {
+        "model.layers.0.mlp.gate": torch.tensor([4, 4, 4, 4]),
+        "model.layers.1.mlp.gate": torch.tensor([8, 0, 0, 0]),
+        "model.layers.2.mlp.gate": torch.tensor([0, 0, 0, 0]),
+    }
+
+    rows = layerwise_normalized_entropy_rows(counts, step=3, split="eval")
+
+    assert compute_normalized_entropy(counts["model.layers.0.mlp.gate"]) == 1.0
+    assert compute_normalized_entropy(counts["model.layers.1.mlp.gate"]) == 0.0
+    assert compute_normalized_entropy(counts["model.layers.2.mlp.gate"]) == 0.0
+    assert rows[0] == {
+        "step": 3,
+        "split": "eval",
+        "layer_index": 0,
+        "layer": "model.layers.0.mlp.gate",
+        "num_experts": 4,
+        "total_assignments": 16,
+        "normalized_entropy": 1.0,
+    }
 
 
 def test_activation_matrix_and_rows_from_counts() -> None:
