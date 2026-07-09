@@ -412,7 +412,8 @@ def _run_megatron_training_loop(
                     loss.backward()
                 loss_total += float(loss.detach().item())
                 tokens += int(input_ids.numel())
-                add_layer_counts(step_layer_counts, collect_expert_load_counts(metric_model))
+                if not config.alf.enabled:
+                    add_layer_counts(step_layer_counts, collect_expert_load_counts(metric_model))
             if _is_megatron_ddp(model):
                 model.finish_grad_sync()
             optimizer_step_successful, grad_norm = _step_megatron_optimizer(
@@ -426,6 +427,8 @@ def _run_megatron_training_loop(
                 scheduler,
                 alf_enabled=config.alf.enabled,
             )
+            if config.alf.enabled:
+                step_layer_counts = collect_expert_load_counts(metric_model)
             step_time_ms = _reduce_max_scalar(step_timer.stop_ms(), device)
             elapsed = max(step_time_ms / 1000.0, 1e-9)
             profile_metrics = all_to_all_profiler.stop(step_time_ms)

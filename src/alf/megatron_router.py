@@ -86,7 +86,7 @@ class MegatronAuxiliaryLossFreeTopKRouter(Qwen3MoeAuxiliaryLossFreeTopKRouter):
         self.reduce_group = reduce_group
 
     def _record_expert_load(self, router_indices: Tensor) -> None:
-        """Record selected-expert counts without reducing across EP ranks.
+        """Accumulate local selected-expert counts without per-forward collectives.
 
         Args:
             router_indices: Selected expert indices with shape ``(tokens, top_k)``.
@@ -98,16 +98,31 @@ class MegatronAuxiliaryLossFreeTopKRouter(Qwen3MoeAuxiliaryLossFreeTopKRouter):
             else:
                 local_load = torch.bincount(router_indices.reshape(-1), minlength=self.num_experts)
             local_load = local_load.to(device=self.last_expert_load.device, dtype=torch.long)
-            expert_load = (
-                reduce_expert_load_counts(local_load, self.reduce_group)
-                if self.training
-                else local_load.detach().clone()
-            )
-            self._set_load_statistics(expert_load)
+            self._set_load_statistics(local_load)
             if self.training:
                 self.accumulated_expert_load.add_(
-                    expert_load.to(device=self.accumulated_expert_load.device, dtype=self.accumulated_expert_load.dtype)
+                    local_load.to(
+                        device=self.accumulated_expert_load.device,
+                        dtype=self.accumulated_expert_load.dtype,
+                    )
                 )
+
+    def update_expert_bias_from_accumulated_load(self) -> bool:
+        """Reduce optimizer-step counts once before applying the ALF update.
+
+        Returns:
+            Whether a bias update event occurred.
+        """
+
+        with torch.no_grad():
+            reduced_load = reduce_expert_load_counts(self.accumulated_expert_load, self.reduce_group)
+            self.accumulated_expert_load.copy_(
+                reduced_load.to(
+                    device=self.accumulated_expert_load.device,
+                    dtype=self.accumulated_expert_load.dtype,
+                )
+            )
+        return super().update_expert_bias_from_accumulated_load()
 
     def forward(self, hidden_states: Tensor, padding_mask: Tensor | None = None) -> tuple[Tensor, Tensor]:
         """Route hidden states and return Megatron-style MoE tensors.
@@ -259,7 +274,7 @@ if TopKRouter is not None:
             return self
 
         def _record_expert_load(self, routing_map: Tensor) -> None:
-            """Record and accumulate routing-map expert counts.
+            """Record and accumulate local routing-map expert counts.
 
             Args:
                 routing_map: Boolean token-to-expert map with shape ``(tokens, num_experts)``.
@@ -267,11 +282,10 @@ if TopKRouter is not None:
 
             with torch.no_grad():
                 local_load = routing_map.sum(dim=0).to(device=self.last_expert_load.device, dtype=torch.long)
-                expert_load = reduce_expert_load_counts(local_load, self.alf_load_group) if self.training else local_load
-                self._set_load_statistics(expert_load)
+                self._set_load_statistics(local_load)
                 if self.training:
                     self.accumulated_expert_load.add_(
-                        expert_load.to(
+                        local_load.to(
                             device=self.accumulated_expert_load.device,
                             dtype=self.accumulated_expert_load.dtype,
                         )
@@ -285,11 +299,10 @@ if TopKRouter is not None:
             """
 
             self.last_expert_load.copy_(expert_load.to(device=self.last_expert_load.device, dtype=torch.long))
-            total_assignments = int(expert_load.sum().item())
-            if total_assignments == 0:
-                self.last_load_fraction.zero_()
-                return
-            load_fraction = expert_load.to(dtype=torch.float32) / float(total_assignments)
+            total_assignments = expert_load.sum()
+            load_fraction = expert_load.to(dtype=torch.float32) / total_assignments.clamp_min(1).to(
+                dtype=torch.float32
+            )
             self.last_load_fraction.copy_(load_fraction.to(device=self.last_load_fraction.device))
 
         def reset_expert_load_accumulator(self) -> None:
@@ -306,7 +319,10 @@ if TopKRouter is not None:
             """
 
             with torch.no_grad():
-                accumulated_load = self.accumulated_expert_load.detach().clone()
+                accumulated_load = reduce_expert_load_counts(
+                    self.accumulated_expert_load,
+                    self.alf_load_group,
+                )
                 self.accumulated_expert_load.zero_()
                 if int(accumulated_load.sum().item()) == 0:
                     self.last_bias_delta.zero_()

@@ -295,3 +295,13 @@ Verification:
 - env PYTHONPATH=src uv run pytest tests/test_megatron.py -q passed with 20 tests.
 - env PYTHONPATH=src uv run pytest -q passed with 84 tests.
 - CUDA_VISIBLE_DEVICES=0,1 env PYTHONPATH=src uv run torchrun --standalone --nproc_per_node=2 -m alf.megatron_train experiments/qwen3_moe_c4_1b_megatron_alf.py [tiny-model overrides] completed one step successfully.
+
+## 2026-07-09 - Defer Megatron ALF load reduction to optimizer step
+- Changed Megatron ALF routers to accumulate local expert counts during gradient accumulation and reduce once over expert-DP before the optimizer-step bias update.
+- Removed per-microbatch ALF metric copies from GPU to CPU; global-batch load metrics are collected once after bias update.
+- Preserved paper semantics and reduced expert-count collectives from `layers * gradient_accumulation_steps` to `layers` per optimizer step.
+
+Verification:
+- `env PYTHONPATH=src uv run pytest tests/test_megatron.py -q` passed with 20 tests.
+- `env PYTHONPATH=src uv run pytest -q` passed with 84 tests.
+- A two-A100 EP=2 smoke with four accumulated microbatches completed one optimizer step; each layer reported `4 * 63 * top3 = 756` assignments, one bias update, and two checkpoint shards.

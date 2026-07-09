@@ -81,4 +81,6 @@ routing map instead of the Hugging Face `(logits, scores, indices)` tuple. The
 
 For EP=4/DP=2 runs, expert-load reduction must use the Megatron TP/CP/DP group and
 exclude the EP dimension. Reducing over the world group would double-count expert
-parallel shards and corrupt both MaxVio metrics and ALF bias updates.
+parallel shards and corrupt both MaxVio metrics and ALF bias updates. Each router
+accumulates local counts over all gradient-accumulation microbatches, then performs
+one expert-DP reduction after a successful optimizer step before updating bias.

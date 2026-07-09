@@ -223,9 +223,9 @@ places 6 experts on each expert-parallel rank.
 The project now has typed `MegatronConfig` fields, 1B ALF/ALF-EMA/aux-loss
 experiment configs, a scripted 8-GPU launch with batch, data, W&B, and LR schedule
 overrides, and a Megatron-compatible ALF router that returns dense probability
-and routing-map tensors. ALF load counts are reduced
-over the expert-data-parallel group so expert-parallel shards are not double-counted
-when EP=4 and DP=2.
+and routing-map tensors. ALF load counts accumulate locally across the optimizer
+step and are reduced once over the expert-data-parallel group before bias update,
+so expert-parallel shards are not double-counted when EP=4 and DP=2.
 
 `alf-megatron-train` now validates the topology, binds `LOCAL_RANK` before NCCL
 initialization, initializes Megatron Core model-parallel groups and CUDA RNG streams,

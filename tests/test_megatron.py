@@ -416,7 +416,7 @@ def test_megatron_core_alf_router_uses_accumulated_ema_update() -> None:
 
 
 def test_megatron_core_alf_router_reduces_load_over_expert_dp(monkeypatch) -> None:
-    """Core router load counts should reduce over expert-DP, not ordinary TP/DP/CP."""
+    """Core router should reduce accumulated load once over expert-DP."""
 
     from megatron.core.transformer.transformer_config import TransformerConfig
 
@@ -427,6 +427,8 @@ def test_megatron_core_alf_router_reduces_load_over_expert_dp(monkeypatch) -> No
 
     class FakeDist:
         """Fake distributed module validating the selected reduce group."""
+
+        calls = 0
 
         ReduceOp = FakeReduceOp
 
@@ -448,6 +450,7 @@ def test_megatron_core_alf_router_reduces_load_over_expert_dp(monkeypatch) -> No
 
             assert op == "sum"
             assert group == "expert_dp"
+            FakeDist.calls += 1
             tensor.add_(10)
 
     import alf.megatron_router as megatron_router
@@ -478,6 +481,10 @@ def test_megatron_core_alf_router_reduces_load_over_expert_dp(monkeypatch) -> No
     router.train()
     router.routing(torch.tensor([[[4.0, 3.0, 2.0, 1.0]]], device=router.weight.device))
 
+    assert FakeDist.calls == 0
+    assert router.accumulated_expert_load.cpu().tolist() == [1, 1, 1, 0]
+    assert router.update_expert_bias_from_accumulated_load() is False
+    assert FakeDist.calls == 1
     assert router.last_expert_load.cpu().tolist() == [11, 11, 11, 10]
 
 
