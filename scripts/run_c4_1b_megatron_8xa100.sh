@@ -5,7 +5,7 @@ project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_root"
 
 if command -v uv >/dev/null 2>&1; then
-  train_cmd=(uv run torchrun)
+  train_cmd=(uv run --frozen --group te-build torchrun)
 elif [[ -x ".venv/bin/torchrun" ]]; then
   train_cmd=(.venv/bin/torchrun)
 else

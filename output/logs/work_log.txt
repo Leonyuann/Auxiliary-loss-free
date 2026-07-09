@@ -305,3 +305,17 @@ Verification:
 - `env PYTHONPATH=src uv run pytest tests/test_megatron.py -q` passed with 20 tests.
 - `env PYTHONPATH=src uv run pytest -q` passed with 84 tests.
 - A two-A100 EP=2 smoke with four accumulated microbatches completed one optimizer step; each layer reported `4 * 63 * top3 = 756` assignments, one bias update, and two checkpoint shards.
+
+## 2026-07-09 - Make Transformer Engine image setup reproducible
+- Locked Transformer Engine 2.16.1 from NVIDIA source in the `te-build` dependency group with CUDA 12.8 NVCC/CCCL and native build tools.
+- Limited disabled build isolation to Transformer Engine so the editable `alf` package still receives its declared Hatchling build backend.
+- Installed locked build prerequisites before compiling Transformer Engine in the Dockerfile and added a build-time import check.
+- Kept the `te-build` group selected in the Megatron launch script so runtime `uv` synchronization cannot remove Transformer Engine.
+- Did not build an image, as requested; registry access and the complete container build remain unverified externally.
+
+Verification:
+- `uv lock --check` resolved 112 packages.
+- Empty-environment `uv sync --frozen --no-install-project --group te-build --no-install-package transformer-engine --dry-run` selected 108 prerequisite packages without Transformer Engine.
+- `uv run --frozen --group te-build python -c "import transformer_engine.pytorch; import alf"` reported Transformer Engine 2.16.1.
+- `bash -n scripts/run_c4_1b_megatron_8xa100.sh` and `git diff --check` passed.
+- `uv run --frozen --group te-build pytest -q` passed with 84 tests.

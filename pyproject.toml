@@ -30,3 +30,19 @@ alf-megatron-train = "alf.megatron_train:main"
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+
+[tool.uv.sources]
+transformer-engine = { git = "https://github.com/NVIDIA/TransformerEngine.git", rev = "v2.16.1" }
+
+[tool.uv]
+no-build-isolation-package = ["transformer-engine"]
+
+[dependency-groups]
+te-build = [
+    "ninja>=1.13.0",
+    "nvidia-cuda-cccl-cu12==12.8.90",
+    "nvidia-cuda-nvcc-cu12==12.8.93",
+    "pybind11>=3.0.4",
+    "transformer-engine",
+    "wheel>=0.47.0",
+]
