@@ -227,11 +227,12 @@ and routing-map tensors. ALF load counts are reduced
 over the expert-data-parallel group so expert-parallel shards are not double-counted
 when EP=4 and DP=2.
 
-`alf-megatron-train` now validates the topology, initializes Megatron Core
-model-parallel groups, builds the GPT/MoE model, runs a minimal forward/backward
-training loop with Megatron Core DDP/optimizer, applies ALF bias updates after
-optimizer steps, and writes per-rank checkpoint shards. The batch validator enforces
-`micro_batch_size * gradient_accumulation_steps * data_parallel_size ==
-global_batch_size`, and the sampler shards over the expert-data-parallel domain.
-The 8xA100 acceptance smoke still needs to be run on the target host before
-treating the path as production-ready.
+`alf-megatron-train` now validates the topology, binds `LOCAL_RANK` before NCCL
+initialization, initializes Megatron Core model-parallel groups and CUDA RNG streams,
+and then builds the GPT/MoE model. The minimal training loop uses Megatron Core
+DDP/optimizer, applies ALF bias updates after optimizer steps, and writes per-rank
+checkpoint shards. The batch validator enforces `micro_batch_size *
+gradient_accumulation_steps * data_parallel_size == global_batch_size`, and the
+sampler shards over the expert-data-parallel domain. A two-A100 EP=2 smoke has
+completed one optimizer step and checkpoint save; the full 8xA100 acceptance smoke
+still needs to run before treating the path as production-ready.

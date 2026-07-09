@@ -101,14 +101,15 @@ RUN_ALF=1 RUN_EMA=0 RUN_AUX=0 MAX_STEPS=10 bash scripts/run_c4_1b_megatron_8xa10
 The launch script also accepts LR-related overrides such as `LR`/`LEARNING_RATE`,
 `WEIGHT_DECAY`, `WARMUP_STEPS`, `SCHEDULER_TYPE`, and `MAX_GRAD_NORM`.
 
-The Megatron entry point validates the 8-GPU topology, initializes Megatron
-model-parallel groups, builds the Megatron GPT/MoE model, and runs a minimal
-training loop with Megatron Core DDP/optimizer so expert and non-expert
-gradients use the proper process groups. Data loading shards over the expert-data-parallel domain
-(DP=2 for the default EP=4 topology), and ALF load counts reduce over that same
-expert-DP domain before optimizer-step bias updates. The current environment has
-not run the 8xA100 acceptance smoke, so treat that hardware validation as the next
-required step before long experiments.
+The Megatron entry point validates the configured topology, binds each CUDA device
+before NCCL initialization, initializes model-parallel groups and RNG streams, then
+builds the GPT/MoE model. Its Megatron Core DDP/optimizer path keeps expert and
+non-expert gradients on the proper process groups. Data loading shards over the
+expert-data-parallel domain (DP=2 for the default EP=4 topology), and ALF load
+counts reduce over that same expert-DP domain before optimizer-step bias updates.
+A two-A100 EP=2 smoke has completed a forward/backward optimizer step, ALF bias
+update, and sharded checkpoint save. The full 8xA100 acceptance smoke remains
+required before long experiments.
 
 ## W&B Observability
 

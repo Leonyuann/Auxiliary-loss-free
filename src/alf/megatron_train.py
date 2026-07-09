@@ -118,11 +118,6 @@ def validate_megatron_config(config: ExperimentConfig) -> None:
         if int(value) <= 0:
             raise ValueError(f"megatron.{name} must be positive, got {value}.")
     expected_world_size = megatron_parallel_world_size(config)
-    if expected_world_size != 8:
-        raise ValueError(
-            "Megatron 8xA100 defaults require TP*PP*CP*EP*DP == 8, "
-            f"got {expected_world_size}."
-        )
     if "WORLD_SIZE" in os.environ:
         runtime_world_size = int(os.environ["WORLD_SIZE"])
         if runtime_world_size != expected_world_size:
@@ -290,8 +285,10 @@ def train(config_path: str | Path, overrides: list[str] | None = None) -> Path:
         raise RuntimeError("Launch Megatron training with torchrun so RANK and WORLD_SIZE are set.")
 
     output_dir = Path(config.training.output_dir)
-    _init_torch_distributed_if_needed(config)
+    device = _resolve_megatron_device()
+    _init_torch_distributed_if_needed(config, device)
     _init_megatron_model_parallel(config)
+    _seed_megatron_model_parallel_rng(config)
     try:
         if _is_global_rank_zero():
             write_megatron_config_snapshot(config, output_dir)
@@ -301,7 +298,7 @@ def train(config_path: str | Path, overrides: list[str] | None = None) -> Path:
             )
         if dist.is_available() and dist.is_initialized():
             dist.barrier()
-        _run_megatron_training_loop(config, output_dir)
+        _run_megatron_training_loop(config, output_dir, device)
         if dist.is_available() and dist.is_initialized():
             dist.barrier()
     finally:
@@ -310,17 +307,22 @@ def train(config_path: str | Path, overrides: list[str] | None = None) -> Path:
     return output_dir
 
 
-def _run_megatron_training_loop(config: ExperimentConfig, output_dir: Path) -> None:
+def _run_megatron_training_loop(
+    config: ExperimentConfig,
+    output_dir: Path,
+    device: torch.device | None = None,
+) -> None:
     """Run a minimal Megatron Core GPT/MoE training loop.
 
     Args:
         config: Loaded experiment configuration.
         output_dir: Directory for metrics and per-rank checkpoints.
+        device: Device already bound before distributed initialization.
     """
 
     from megatron.core import parallel_state
 
-    device = _resolve_megatron_device()
+    device = device or _resolve_megatron_device()
     model = build_megatron_gpt_model(config).to(device)
     model.train()
     if dist.is_available() and dist.is_initialized():
@@ -985,11 +987,15 @@ def _require_megatron_core() -> None:
         ) from error
 
 
-def _init_torch_distributed_if_needed(config: ExperimentConfig) -> None:
+def _init_torch_distributed_if_needed(
+    config: ExperimentConfig,
+    device: torch.device | None = None,
+) -> None:
     """Initialize torch.distributed for Megatron launch bookkeeping.
 
     Args:
         config: Loaded experiment configuration.
+        device: CUDA device bound to the current local rank.
     """
 
     global _INITIALIZED_DISTRIBUTED
@@ -998,7 +1004,8 @@ def _init_torch_distributed_if_needed(config: ExperimentConfig) -> None:
     if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
         return
     backend = "nccl" if torch.cuda.is_available() else "gloo"
-    dist.init_process_group(backend=backend)
+    kwargs = {"device_id": device} if backend == "nccl" and device is not None else {}
+    dist.init_process_group(backend=backend, **kwargs)
     _INITIALIZED_DISTRIBUTED = True
 
 
@@ -1019,6 +1026,20 @@ def _init_megatron_model_parallel(config: ExperimentConfig) -> None:
         context_parallel_size=config.megatron.context_parallel_size,
         expert_model_parallel_size=config.megatron.expert_model_parallel_size,
     )
+
+
+def _seed_megatron_model_parallel_rng(config: ExperimentConfig) -> None:
+    """Register Megatron CUDA RNG streams after model-parallel initialization.
+
+    Args:
+        config: Loaded experiment configuration containing the training seed.
+    """
+
+    if not torch.cuda.is_available():
+        return
+    from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
+
+    model_parallel_cuda_manual_seed(config.training.seed)
 
 
 def _cleanup_megatron_model_parallel() -> None:

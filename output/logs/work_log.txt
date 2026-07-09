@@ -283,3 +283,15 @@ Verification:
 
 Verification:
 - bash -n scripts/run_c4_1b_megatron_8xa100.sh
+
+## 2026-07-09 - Fix Megatron CUDA RNG initialization order
+- Bound each process to `LOCAL_RANK` before initializing NCCL and passed the CUDA device to `dist.init_process_group`.
+- Registered Megatron model-parallel CUDA RNG streams after parallel-group initialization and before GPT model construction.
+- Allowed configured non-8-GPU topologies for local smoke tests while preserving TP=1/PP=1/CP=1/EP=4/DP=2 in the default experiments.
+- Added regressions for initialization ordering, CUDA RNG seeding, and a consistent EP=2/DP=1 smoke topology.
+- Completed a real two-A100 EP=2 smoke through MoE forward/backward, successful Megatron optimizer step, ALF bias update, metrics, and two rank checkpoint shards.
+
+Verification:
+- env PYTHONPATH=src uv run pytest tests/test_megatron.py -q passed with 20 tests.
+- env PYTHONPATH=src uv run pytest -q passed with 84 tests.
+- CUDA_VISIBLE_DEVICES=0,1 env PYTHONPATH=src uv run torchrun --standalone --nproc_per_node=2 -m alf.megatron_train experiments/qwen3_moe_c4_1b_megatron_alf.py [tiny-model overrides] completed one step successfully.

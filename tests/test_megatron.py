@@ -20,6 +20,7 @@ from alf.megatron_train import (
     _megatron_clip_grad,
     _megatron_global_tokens,
     _post_megatron_optimizer_step,
+    _seed_megatron_model_parallel_rng,
     _step_megatron_optimizer,
     build_megatron_layer_spec,
     megatron_effective_global_batch_size,
@@ -51,6 +52,77 @@ def test_c4_1b_megatron_configs_use_ep4_dp2_top3_defaults() -> None:
         assert config.model.num_experts // config.megatron.expert_model_parallel_size == 6
         assert megatron_effective_global_batch_size(config) == config.megatron.global_batch_size == 16
         validate_megatron_config(config)
+
+
+def test_megatron_config_allows_consistent_two_gpu_smoke_topology(monkeypatch) -> None:
+    """Default 8-GPU configs should permit smaller consistent smoke topologies."""
+
+    monkeypatch.delenv("WORLD_SIZE", raising=False)
+    config = load_experiment_config("experiments/qwen3_moe_c4_1b_megatron_alf.py")
+    config.megatron.expert_model_parallel_size = 2
+    config.megatron.data_parallel_size = 1
+    config.megatron.global_batch_size = 8
+
+    assert megatron_parallel_world_size(config) == 2
+    validate_megatron_config(config)
+
+
+def test_megatron_train_binds_device_and_seeds_rng_before_model_build(monkeypatch, tmp_path) -> None:
+    """Training should bind CUDA and seed Megatron RNG before constructing GPT."""
+
+    import alf.megatron_train as megatron_train
+
+    config = load_experiment_config("experiments/qwen3_moe_c4_1b_megatron_alf.py")
+    config.training.output_dir = str(tmp_path)
+    events = []
+    device = torch.device("cuda", 1)
+
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("WORLD_SIZE", "8")
+    monkeypatch.setattr(megatron_train, "load_experiment_config", lambda *args: config)
+    monkeypatch.setattr(megatron_train, "_require_megatron_core", lambda: None)
+    monkeypatch.setattr(megatron_train, "_resolve_megatron_device", lambda: events.append("device") or device)
+    monkeypatch.setattr(
+        megatron_train,
+        "_init_torch_distributed_if_needed",
+        lambda loaded, resolved: events.append(("distributed", resolved)),
+    )
+    monkeypatch.setattr(megatron_train, "_init_megatron_model_parallel", lambda loaded: events.append("parallel"))
+    monkeypatch.setattr(megatron_train, "_seed_megatron_model_parallel_rng", lambda loaded: events.append("rng"))
+    monkeypatch.setattr(megatron_train, "_is_global_rank_zero", lambda: False)
+    monkeypatch.setattr(
+        megatron_train,
+        "_run_megatron_training_loop",
+        lambda loaded, output, resolved: events.append(("model", resolved)),
+    )
+    monkeypatch.setattr(megatron_train, "_cleanup_megatron_model_parallel", lambda: None)
+    monkeypatch.setattr(megatron_train, "_cleanup_torch_distributed_if_needed", lambda: None)
+
+    megatron_train.train("unused.py")
+
+    assert events == [
+        "device",
+        ("distributed", device),
+        "parallel",
+        "rng",
+        ("model", device),
+    ]
+
+
+def test_megatron_cuda_rng_seed_uses_training_seed(monkeypatch) -> None:
+    """Megatron model-parallel CUDA RNG should receive the experiment seed."""
+
+    import megatron.core.tensor_parallel.random as megatron_random
+
+    seeds = []
+    config = load_experiment_config("experiments/qwen3_moe_c4_1b_megatron_alf.py")
+    config.training.seed = 2468
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(megatron_random, "model_parallel_cuda_manual_seed", seeds.append)
+
+    _seed_megatron_model_parallel_rng(config)
+
+    assert seeds == [2468]
 
 
 def test_megatron_config_rejects_mismatched_effective_global_batch() -> None:
