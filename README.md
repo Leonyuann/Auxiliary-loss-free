@@ -100,9 +100,10 @@ RUN_ALF=1 RUN_EMA=0 RUN_AUX=0 MAX_STEPS=10 bash scripts/run_c4_1b_megatron_8xa10
 
 The launch script also accepts LR-related overrides such as `LR`/`LEARNING_RATE`,
 `WEIGHT_DECAY`, `WARMUP_STEPS`, `SCHEDULER_TYPE`, and `MAX_GRAD_NORM`.
-The Docker image builds Transformer Engine 2.16.1 from the locked NVIDIA source.
-The launch script selects the `te-build` dependency group explicitly so a runtime
-`uv` sync preserves Transformer Engine and its CUDA 12.8 build dependencies.
+The Docker image uses a CUDA 12.9 compiler/Python 3.12 base and builds Transformer
+Engine 2.16.1 from the locked NVIDIA source. PyTorch and its CUDA 12.8 Python
+dependencies remain locked by `uv.lock`. The launch script selects the `te-build`
+dependency group explicitly so a runtime `uv` sync preserves Transformer Engine.
 
 The Megatron entry point validates the configured topology, binds each CUDA device
 before NCCL initialization, initializes model-parallel groups and RNG streams, then

@@ -319,3 +319,16 @@ Verification:
 - `uv run --frozen --group te-build python -c "import transformer_engine.pytorch; import alf"` reported Transformer Engine 2.16.1.
 - `bash -n scripts/run_c4_1b_megatron_8xa100.sh` and `git diff --check` passed.
 - `uv run --frozen --group te-build pytest -q` passed with 84 tests.
+
+## 2026-07-09 - Build Transformer Engine from a CUDA compiler image
+- Diagnosed the container failure as a missing `nvcc`; the CUDA NVCC Python wheel did not provide the x86_64 compiler driver, while the earlier host build had used `/usr/local/cuda/bin/nvcc` from CUDA 12.9.
+- Switched the base image to the private CUDA 12.9/Python 3.12/Ubuntu 22.04 image.
+- Set `CUDA_HOME`, `CUDAToolkit_ROOT`, `CUDACXX`, and `PATH` to the standard `/usr/local/cuda` toolkit location.
+- Added an early `nvcc --version` build check so a runtime-only base image fails before dependency synchronization and Transformer Engine compilation.
+- Kept PyTorch and its CUDA 12.8 Python dependencies locked independently in `uv.lock`.
+
+Verification:
+- Inspected Transformer Engine 2.16.1 build helpers and confirmed `CUDA_HOME/bin/nvcc` is its first compiler lookup path.
+- `git diff --check`, `uv lock --check`, and launcher `bash -n` checks passed.
+- `uv run --frozen --group te-build pytest -q` passed with 84 tests.
+- The private CUDA base image was not pulled or built locally; `RUN nvcc --version` remains the image-level acceptance check.

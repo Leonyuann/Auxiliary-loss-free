@@ -1,4 +1,4 @@
-FROM vemlp-cn-beijing.cr.volces.com/preset-images/python:3.12-ubuntu22.04
+FROM vemlp-cn-beijing.cr.volces.com/preset-images/cuda:12.9.0-py3.12-ubuntu22.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
@@ -9,13 +9,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.local/bin:$PATH"
-ENV NVTE_FRAMEWORK=pytorch \
+ENV CUDA_HOME=/usr/local/cuda \
+    CUDAToolkit_ROOT=/usr/local/cuda \
+    CUDACXX=/usr/local/cuda/bin/nvcc \
+    PATH="/usr/local/cuda/bin:/root/.local/bin:$PATH" \
+    NVTE_FRAMEWORK=pytorch \
     NVTE_BUILD_USE_NVIDIA_WHEELS=1 \
     NVTE_CUDA_ARCHS=80 \
     MAX_JOBS=4 \
     NVTE_BUILD_THREADS_PER_JOB=1 \
     UV_LINK_MODE=copy
+RUN nvcc --version
 
 WORKDIR /workspace/Auxiliary-loss-free
 
