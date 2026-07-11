@@ -11,12 +11,17 @@ from alf.megatron_router import (
     MegatronAuxiliaryLossFreeTopKRouter,
     MegatronCoreAuxiliaryLossFreeTopKRouter,
     reduce_expert_load_counts,
+    update_megatron_alf_router_biases,
 )
 from alf.megatron_train import (
     estimate_moe_total_parameters,
     _build_megatron_sampler,
     _build_megatron_training_optimizer,
     _build_megatron_training_scheduler,
+    _collect_megatron_load_observers,
+    _install_megatron_load_observers,
+    _load_megatron_rank_checkpoint,
+    _save_megatron_rank_checkpoint,
     _megatron_clip_grad,
     _megatron_global_tokens,
     _post_megatron_optimizer_step,
@@ -578,3 +583,139 @@ def test_reduce_expert_load_counts_only_uses_explicit_group(monkeypatch) -> None
 
     assert reduce_expert_load_counts(local, reduce_group=None).tolist() == [1, 2, 3]
     assert reduce_expert_load_counts(local, reduce_group="tp_cp_dp").tolist() == [11, 12, 13]
+
+
+def test_megatron_checkpoint_roundtrip_restores_training_and_router_state(tmp_path) -> None:
+    """Rank checkpoints should restore model, optimizer, scheduler, and step."""
+
+    config = load_experiment_config("experiments/qwen3_moe_c4_1b_megatron_alf.py")
+    model = torch.nn.Linear(2, 2)
+    model.register_buffer("expert_bias", torch.tensor([1.0, -1.0]))
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.01)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1)
+    model(torch.ones(1, 2)).sum().backward()
+    optimizer.step()
+    scheduler.step()
+    expected_weight = model.weight.detach().clone()
+
+    _save_megatron_rank_checkpoint(
+        tmp_path, model, optimizer, scheduler, 7, config, attempt=9
+    )
+    with torch.no_grad():
+        model.weight.zero_()
+        model.expert_bias.zero_()
+
+    step, attempt = _load_megatron_rank_checkpoint(
+        tmp_path / "latest", model, optimizer, scheduler, config, torch.device("cpu")
+    )
+
+    assert (step, attempt) == (7, 9)
+    assert torch.allclose(model.weight, expected_weight)
+    assert model.expert_bias.tolist() == [1.0, -1.0]
+    assert scheduler.last_epoch == 1
+
+
+def test_megatron_checkpoint_rejects_incomplete_metadata(tmp_path) -> None:
+    """Resume should fail before reading shards when publication is incomplete."""
+
+    import json
+    import pytest
+    from alf.megatron_train import _checkpoint_topology
+
+    config = load_experiment_config("experiments/qwen3_moe_c4_1b_megatron_alf.py")
+    checkpoint = tmp_path / "latest"
+    checkpoint.mkdir()
+    (checkpoint / "metadata.json").write_text(
+        json.dumps(
+            {
+                "complete": False,
+                "step": 3,
+                "world_size": 1,
+                "topology": _checkpoint_topology(config),
+            }
+        ),
+        encoding="utf-8",
+    )
+    model = torch.nn.Linear(1, 1)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1)
+
+    with pytest.raises(RuntimeError, match="incomplete"):
+        _load_megatron_rank_checkpoint(
+            checkpoint, model, optimizer, scheduler, config, torch.device("cpu")
+        )
+
+
+def test_megatron_load_observer_accumulates_across_microbatches() -> None:
+    """Native-router observations should expose whole-step assignment counts."""
+
+    class FakeTopKRouter(torch.nn.Module):
+        """Small router exposing the Megatron router output contract."""
+
+        def __init__(self) -> None:
+            """Initialize one parameter and expert-count config."""
+
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.ones(()))
+            self.config = SimpleNamespace(num_moe_experts=3)
+
+        def forward(self, routing_map: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+            """Return probabilities and the supplied boolean routing map."""
+
+            return routing_map.float(), routing_map
+
+    router = FakeTopKRouter()
+    _install_megatron_load_observers(router)
+    router(torch.tensor([[True, False, True]]))
+    router(torch.tensor([[False, True, True]]))
+
+    counts = _collect_megatron_load_observers(router)
+
+    assert counts[""].tolist() == [1, 1, 2]
+
+
+def test_megatron_alf_updates_stack_layer_reduction(monkeypatch) -> None:
+    """ALF should reduce all same-group layer counts in one collective."""
+
+    import alf.megatron_router as megatron_router
+
+    calls = []
+
+    class FakeRouter:
+        """Router facade recording a pre-reduced ALF update."""
+
+        def __init__(self, counts: list[int]) -> None:
+            """Initialize local counts in a shared fake group."""
+
+            self.accumulated_expert_load = torch.tensor(counts)
+            self.alf_load_group = "expert_dp"
+            self.reduced = None
+
+        def update_expert_bias_from_reduced_load(self, counts: torch.Tensor) -> bool:
+            """Store the reduced counts and report one update event."""
+
+            self.reduced = counts.clone()
+            return True
+
+    routers = [FakeRouter([1, 2]), FakeRouter([3, 4])]
+
+    def fake_reduce(counts: torch.Tensor, group: object) -> torch.Tensor:
+        """Record one stacked reduction and return a deterministic result."""
+
+        calls.append((counts.clone(), group))
+        return counts + 10
+
+    monkeypatch.setattr(
+        megatron_router,
+        "iter_megatron_alf_routers",
+        lambda module: iter([("a", routers[0]), ("b", routers[1])]),
+    )
+    monkeypatch.setattr(megatron_router, "reduce_expert_load_counts", fake_reduce)
+
+    events = update_megatron_alf_router_biases(torch.nn.Linear(1, 1))
+
+    assert events == 2
+    assert len(calls) == 1
+    assert calls[0][0].shape == (2, 2)
+    assert routers[0].reduced.tolist() == [11, 12]
+    assert routers[1].reduced.tolist() == [13, 14]

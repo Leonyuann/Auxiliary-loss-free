@@ -111,9 +111,27 @@ builds the GPT/MoE model. Its Megatron Core DDP/optimizer path keeps expert and
 non-expert gradients on the proper process groups. Data loading shards over the
 expert-data-parallel domain (DP=2 for the default EP=4 topology), and ALF load
 counts reduce over that same expert-DP domain before optimizer-step bias updates.
-A two-A100 EP=2 smoke has completed a forward/backward optimizer step, ALF bias
-update, and sharded checkpoint save. The full 8xA100 acceptance smoke remains
-required before long experiments.
+The Megatron path supports per-rank checkpoint resume through
+`--training.resume_from OUTPUT/latest`. A checkpoint is published only after every
+rank shard is present, and resume validates world size and TP/PP/CP/EP/DP topology
+before restoring the model (including ALF/EMA router buffers), distributed optimizer,
+scheduler, successful optimizer-step count, attempt count, and torch RNG state.
+`training.max_steps` counts successful optimizer updates; overflow/skipped attempts
+do not advance the scheduler, ALF bias, logging step, evaluation, or checkpoint step,
+and 100 consecutive skips abort instead of looping silently.
+
+Megatron training now reports native raw/scaled auxiliary loss, whole-global-batch
+expert load for both auxiliary-loss and ALF runs, and distributed validation
+loss/PPL/MaxVio/activation metrics. Router observation tensors and CUDA timing are
+materialized only on logging steps, and all ALF layer counts are reduced in one
+stacked expert-DP collective per optimizer update. Transformer Engine/grouped GEMM
+and gradient-reduce overlap remain disabled until their numerical compatibility with
+the custom softmax ALF router is accepted on the 8xA100 target.
+
+Two-A100 EP=2 smokes have completed ALF training/evaluation/checkpoint save, a
+step-1-to-step-2 distributed-optimizer resume, and an auxiliary-loss run with
+nonzero train/eval auxiliary loss and expert loads. The full 8xA100 acceptance and
+throughput benchmark remain required before long experiments.
 
 ## W&B Observability
 

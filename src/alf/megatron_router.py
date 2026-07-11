@@ -312,17 +312,29 @@ if TopKRouter is not None:
                 self.accumulated_expert_load.zero_()
 
         def update_expert_bias_from_accumulated_load(self) -> bool:
-            """Update expert bias once from accumulated optimizer-step load.
+            """Reduce counts and update expert bias once for one optimizer step.
+
+            Returns:
+                Whether a bias update event occurred.
+            """
+
+            accumulated_load = reduce_expert_load_counts(
+                self.accumulated_expert_load,
+                self.alf_load_group,
+            )
+            return self.update_expert_bias_from_reduced_load(accumulated_load)
+
+        def update_expert_bias_from_reduced_load(self, accumulated_load: Tensor) -> bool:
+            """Update expert bias from counts already reduced over expert DP.
+
+            Args:
+                accumulated_load: Global-batch expert counts for this router.
 
             Returns:
                 Whether a bias update event occurred.
             """
 
             with torch.no_grad():
-                accumulated_load = reduce_expert_load_counts(
-                    self.accumulated_expert_load,
-                    self.alf_load_group,
-                )
                 self.accumulated_expert_load.zero_()
                 if int(accumulated_load.sum().item()) == 0:
                     self.last_bias_delta.zero_()
@@ -577,10 +589,18 @@ def update_megatron_alf_router_biases(module: torch.nn.Module) -> int:
         Number of routers that applied a bias update.
     """
 
+    routers = [router for _, router in iter_megatron_alf_routers(module)]
+    grouped: dict[int, list[Any]] = {}
+    for router in routers:
+        grouped.setdefault(id(router.alf_load_group), []).append(router)
+
     update_events = 0
-    for _, router in iter_megatron_alf_routers(module):
-        if router.update_expert_bias_from_accumulated_load():
-            update_events += 1
+    for group_routers in grouped.values():
+        stacked_load = torch.stack([router.accumulated_expert_load for router in group_routers])
+        reduced_load = reduce_expert_load_counts(stacked_load, group_routers[0].alf_load_group)
+        for index, router in enumerate(group_routers):
+            if router.update_expert_bias_from_reduced_load(reduced_load[index]):
+                update_events += 1
     return update_events
 
 

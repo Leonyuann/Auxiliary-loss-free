@@ -66,3 +66,16 @@ Disabled W&B:
 ```bash
 uv run alf-train experiments/qwen3_moe_tiny_alf.py --wandb.enabled false
 ```
+
+
+## Megatron metric cadence
+
+Megatron uses the same public train/eval keys. Native router auxiliary loss is
+reported as `train/aux_loss` and multiplied by the configured coefficient for
+`train/aux_loss_scaled`; `train/loss` is LM loss plus that scaled term.
+Validation reports the corresponding auxiliary fields and global expert loads.
+
+To keep the hot path free of metric synchronization, detailed router, activation,
+system-memory, and CUDA timing values are collected on `training.log_every` steps
+and the final step. `attempt` and `train/optimizer_skipped_attempts` diagnose
+mixed-precision overflow without changing the successful optimizer-step axis.

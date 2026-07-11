@@ -195,9 +195,10 @@ Delivered so far:
 - Added a scripted 8-GPU launch wrapper.
 - Added a Megatron-compatible ALF top-k router and expert-data-parallel load reducer.
 - Added Megatron config validation, transformer-config generation, and GPTModel construction helpers.
-- Added a minimal Megatron Core training loop with Megatron Core DDP/optimizer, expert-data-parallel sampling, optimizer-step ALF bias updates, metrics, and per-rank checkpoint shards.
+- Added a Megatron Core training loop with Megatron Core DDP/optimizer, expert-data-parallel sampling, optimizer-step ALF bias updates, metrics, and complete per-rank checkpoint resume.
+- Added successful-update `max_steps` semantics, native auxiliary-loss/load observations, distributed validation, stacked ALF count reduction, and log-cadence hot-path metrics.
 
 Remaining work:
 
 - Run the 8xA100 10-step acceptance check on the target A100 host.
-- Harden the path with real Megatron distributed optimizer integration and validation/eval parity.
+- Run the full 8xA100 throughput benchmark and validate Transformer Engine/grouped-GEMM/gradient-overlap numerical parity before enabling those performance paths.
