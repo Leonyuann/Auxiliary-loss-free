@@ -111,8 +111,9 @@ builds the GPT/MoE model. Its Megatron Core DDP/optimizer path keeps expert and
 non-expert gradients on the proper process groups. Data loading shards over the
 expert-data-parallel domain (DP=2 for the default EP=4 topology), and ALF load
 counts reduce over that same expert-DP domain before optimizer-step bias updates.
-The Megatron path supports per-rank checkpoint resume through
-`--training.resume_from OUTPUT/latest`. A checkpoint is published only after every
+The Megatron path automatically resumes from `training.output_dir/latest` when that
+checkpoint exists. `--training.resume_from CHECKPOINT` selects a different checkpoint
+and takes precedence over the default. A checkpoint is published only after every
 rank shard is present, and resume validates world size and TP/PP/CP/EP/DP topology
 before restoring the model (including ALF/EMA router buffers), distributed optimizer,
 scheduler, successful optimizer-step count, attempt count, and torch RNG state.

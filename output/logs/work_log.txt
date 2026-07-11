@@ -361,3 +361,9 @@ Verification:
 - Two-A100 EP=2 ALF smoke completed train/eval/checkpoint, then restored a complete distributed optimizer checkpoint from step 1 and reached step 2 with finite parameters.
 - Two-A100 EP=2 auxiliary-loss smoke logged nonzero train/eval raw and scaled auxiliary loss plus expert loads and MaxVio.
 - git diff --check passed.
+
+## 2026-07-11 - Default Megatron resume to latest checkpoint
+- Made Megatron automatically resume `training.output_dir/latest` when it exists and
+  `training.resume_from` is unset.
+- Preserved explicit checkpoint paths as the higher-priority resume selection.
+- Added resolver regression coverage and documented the default behavior.

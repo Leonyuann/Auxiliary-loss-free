@@ -21,6 +21,7 @@ from alf.megatron_train import (
     _collect_megatron_load_observers,
     _install_megatron_load_observers,
     _load_megatron_rank_checkpoint,
+    _resolve_megatron_resume_checkpoint,
     _save_megatron_rank_checkpoint,
     _megatron_clip_grad,
     _megatron_global_tokens,
@@ -644,6 +645,22 @@ def test_megatron_checkpoint_rejects_incomplete_metadata(tmp_path) -> None:
         _load_megatron_rank_checkpoint(
             checkpoint, model, optimizer, scheduler, config, torch.device("cpu")
         )
+
+
+def test_megatron_resume_defaults_to_latest_checkpoint(tmp_path) -> None:
+    """Megatron should resume output-dir latest unless an explicit path wins."""
+
+    config = load_experiment_config("experiments/qwen3_moe_c4_1b_megatron_alf.py")
+
+    assert _resolve_megatron_resume_checkpoint(config, tmp_path) is None
+
+    latest = tmp_path / "latest"
+    latest.mkdir()
+    assert _resolve_megatron_resume_checkpoint(config, tmp_path) == latest
+
+    explicit = tmp_path / "selected-checkpoint"
+    config.training.resume_from = str(explicit)
+    assert _resolve_megatron_resume_checkpoint(config, tmp_path) == explicit
 
 
 def test_megatron_load_observer_accumulates_across_microbatches() -> None:

@@ -365,9 +365,10 @@ def _run_megatron_training_loop(
     scheduler = _build_megatron_training_scheduler(optimizer, config)
     successful_step = 0
     attempt = 0
-    if config.training.resume_from:
+    resume_checkpoint = _resolve_megatron_resume_checkpoint(config, output_dir)
+    if resume_checkpoint is not None:
         successful_step, attempt = _load_megatron_rank_checkpoint(
-            Path(config.training.resume_from), metric_model, optimizer, scheduler, config, device
+            resume_checkpoint, metric_model, optimizer, scheduler, config, device
         )
 
     metrics_path = output_dir / "metrics.jsonl"
@@ -1276,6 +1277,27 @@ def _checkpoint_topology(config: ExperimentConfig) -> dict[str, int]:
         "expert_model_parallel_size": int(megatron.expert_model_parallel_size),
         "data_parallel_size": int(megatron.data_parallel_size),
     }
+
+
+def _resolve_megatron_resume_checkpoint(
+    config: ExperimentConfig,
+    output_dir: Path,
+) -> Path | None:
+    """Resolve the explicit or default Megatron checkpoint to resume.
+
+    Args:
+        config: Experiment configuration containing an optional explicit resume path.
+        output_dir: Current experiment output directory.
+
+    Returns:
+        The explicit checkpoint path when configured, otherwise ``output_dir/latest``
+        when it exists, or ``None`` when training should start from scratch.
+    """
+
+    if config.training.resume_from:
+        return Path(config.training.resume_from)
+    latest_checkpoint = output_dir / "latest"
+    return latest_checkpoint if latest_checkpoint.exists() else None
 
 
 def _distributed_optimizer_leaves(optimizer: Any) -> list[Any]:

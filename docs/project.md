@@ -245,7 +245,9 @@ Each rank first atomically replaces its shard; rank zero marks the checkpoint co
 only after all configured world-size shards exist. Resume rejects incomplete,
 world-size-mismatched, or TP/PP/CP/EP/DP-mismatched checkpoints and restores the
 local model/ALF-EMA buffers, optimizer, scheduler, successful step, attempt counter,
-and torch RNG state.
+and torch RNG state. When `training.resume_from` is unset, Megatron automatically
+resumes `training.output_dir/latest` if it exists; an explicit resume path takes
+precedence.
 
 Megatron `max_steps` is the number of successful optimizer updates. Skipped
 mixed-precision optimizer attempts consume data but do not advance LR, ALF/EMA bias,
