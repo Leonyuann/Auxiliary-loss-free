@@ -367,3 +367,21 @@ Verification:
   `training.resume_from` is unset.
 - Preserved explicit checkpoint paths as the higher-priority resume selection.
 - Added resolver regression coverage and documented the default behavior.
+
+
+## 2026-07-11 - Fix Megatron correctness, resume durability, validation, and throughput paths
+- Scaled Megatron native MoE auxiliary-loss gradients with the same optimizer loss scale and gradient-accumulation divisor as the LM loss.
+- Applied `bias_max_update_steps` to Megatron ALF/EMA routers and retained whole-global-batch, once-per-successful-step bias updates.
+- Made checkpoint publication crash-safe with `.latest.incomplete`, retained `.latest.previous`, restored Python/NumPy/Torch/Megatron CUDA RNG streams, and resumed the deterministic consumed-batch cursor.
+- Kept `max_steps` tied to successful optimizer updates so mixed-precision skips consume data without advancing scheduler, router bias, evaluation, logging, or checkpoint steps.
+- Corrected validation sharding to avoid padded duplicate samples and made native auxiliary loss batch/token weighted; router loads remain aggregated over the complete validation set.
+- Removed redundant Megatron CPU labels and masks, gated router observation to metric windows, packed system-metric reduction, and enabled Transformer Engine, grouped expert GEMM, gradient-reduction overlap, and parameter-gather overlap by default.
+- Rejected unsupported TP/PP/CP degrees in the manual loop instead of silently running invalid parallel semantics.
+
+Verification:
+- `bash -n scripts/run_c4_1b_megatron_8xa100.sh` passed.
+- `uv run python -m compileall -q src tests` passed.
+- `uv run pytest` passed with 95 tests.
+- Two-A100 EP=2 Transformer Engine/grouped-GEMM ALF smoke completed training, evaluation, checkpoint save, and automatic step-1-to-step-2 distributed-optimizer resume; the previous complete checkpoint was retained.
+- Two-A100 EP=2 auxiliary-loss smoke with gradient accumulation completed with nonzero train/eval raw and scaled auxiliary loss, exact non-duplicated validation token count, expert loads, and MaxVio.
+- Full 8xA100 throughput remains an acceptance benchmark; the intentionally excluded Megatron-vs-DDP Qwen3 model-semantic mismatch was not changed.

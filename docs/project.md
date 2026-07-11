@@ -240,12 +240,14 @@ still needs to run before treating the path as production-ready.
 
 ### Megatron hardening semantics
 
-Megatron checkpoints use a two-phase publication marker under `latest/metadata.json`.
-Each rank first atomically replaces its shard; rank zero marks the checkpoint complete
-only after all configured world-size shards exist. Resume rejects incomplete,
+Megatron checkpoints are assembled under `.latest.incomplete` and published to
+`latest` only after all configured world-size shards exist. Resume rejects incomplete,
 world-size-mismatched, or TP/PP/CP/EP/DP-mismatched checkpoints and restores the
 local model/ALF-EMA buffers, optimizer, scheduler, successful step, attempt counter,
-and torch RNG state. When `training.resume_from` is unset, Megatron automatically
+and Python/NumPy/Torch plus Megatron model-parallel CUDA RNG state. Checkpoint
+publication uses an isolated staging directory and retains the prior complete latest.
+The saved attempt count restores a deterministic dataloader epoch/batch cursor. When
+`training.resume_from` is unset, Megatron automatically
 resumes `training.output_dir/latest` if it exists; an explicit resume path takes
 precedence.
 
@@ -255,14 +257,16 @@ evaluation, logging, or checkpoint steps. One hundred consecutive skips raise an
 error. The JSONL `attempt` and `train/optimizer_skipped_attempts` fields expose
 the difference.
 
-Native Megatron auxiliary-loss values are consumed from the framework MoE tracker,
-while detached router hooks accumulate assignment counts across all microbatches.
+Native Megatron auxiliary-loss gradients use the same optimizer loss scale and
+gradient-accumulation factor as the LM loss. Reported values are consumed from the
+framework MoE tracker, while detached router hooks accumulate assignment counts
+across all microbatches.
 Training load observation is reduced only on logging steps. ALF bias updates stack
 all layers into one expert-DP all-reduce. Validation runs on every EP rank, shards
 samples over expert DP, and aggregates LM loss, PPL, native auxiliary loss, MaxVio,
 and expert activations.
 
-The local layer implementation, sequential expert MLP, and non-overlapped gradient
-reduction remain deliberately unchanged. Transformer Engine, grouped GEMM, and
-gradient-reduction overlap need a separate numerical-parity and 8xA100 performance
-acceptance before becoming defaults.
+Transformer Engine layers, grouped expert GEMM, gradient-reduction overlap, and
+distributed-optimizer parameter-gather overlap are enabled by default. The local
+sequential-expert path remains configurable for debugging; full 8xA100 throughput
+profiling remains an acceptance item.

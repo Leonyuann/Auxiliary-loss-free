@@ -34,7 +34,26 @@ class PackedTextDataset(Dataset[dict[str, torch.Tensor]]):
 class PackedTokenFileDataset(Dataset[dict[str, torch.Tensor]]):
     """Memory-mapped fixed-length blocks from one pre-tokenized token file."""
 
-    def __init__(self, path: str | Path, block_size: int, max_samples: int | None = None) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        block_size: int,
+        max_samples: int | None = None,
+        include_labels: bool = True,
+    ) -> None:
+        """Initialize a memory-mapped token dataset.
+
+        Args:
+            path: Pre-tokenized file path.
+            block_size: Tokens per returned sample.
+            max_samples: Optional sample limit.
+            include_labels: Whether to clone input ids into a labels field.
+
+        Raises:
+            ValueError: If shape, suffix, or size is invalid.
+            FileNotFoundError: If the token file does not exist.
+        """
+
         if block_size <= 0:
             raise ValueError(f"block_size must be positive, got {block_size}.")
         self.path = Path(path)
@@ -48,6 +67,7 @@ class PackedTokenFileDataset(Dataset[dict[str, torch.Tensor]]):
         if file_size % item_size != 0:
             raise ValueError(f"Token file size is not divisible by dtype size: {self.path}")
         self.block_size = int(block_size)
+        self.include_labels = bool(include_labels)
         self.num_tokens = file_size // item_size
         self.tokens = torch.from_file(str(self.path), dtype=dtype, size=self.num_tokens)
         available_blocks = self.num_tokens // self.block_size
@@ -63,7 +83,10 @@ class PackedTokenFileDataset(Dataset[dict[str, torch.Tensor]]):
             raise IndexError(index)
         start = index * self.block_size
         input_ids = self.tokens[start : start + self.block_size].to(dtype=torch.long)
-        return {"input_ids": input_ids, "labels": input_ids.clone()}
+        item = {"input_ids": input_ids}
+        if self.include_labels:
+            item["labels"] = input_ids.clone()
+        return item
 
 
 def is_token_file(path: str | Path) -> bool:
@@ -89,13 +112,33 @@ def build_packed_text_dataset(
     paths: Sequence[str | Path],
     block_size: int,
     max_train_samples: int | None = None,
+    include_labels: bool = True,
 ) -> Dataset[dict[str, torch.Tensor]]:
-    """Build a fixed-length packed dataset from text or one pre-tokenized file."""
+    """Build a fixed-length packed dataset from text or one token file.
+
+    Args:
+        tokenizer: Tokenizer used for raw text inputs.
+        paths: Source text paths or one pre-tokenized file.
+        block_size: Tokens per packed sample.
+        max_train_samples: Optional sample limit.
+        include_labels: Whether token-file items include cloned labels.
+
+    Returns:
+        Packed dataset suitable for the selected training backend.
+
+    Raises:
+        ValueError: If paths or packed output are invalid.
+    """
 
     if not paths:
         raise ValueError("At least one data file is required.")
     if len(paths) == 1 and is_token_file(paths[0]):
-        return PackedTokenFileDataset(paths[0], block_size=block_size, max_samples=max_train_samples)
+        return PackedTokenFileDataset(
+            paths[0],
+            block_size=block_size,
+            max_samples=max_train_samples,
+            include_labels=include_labels,
+        )
     if any(is_token_file(path) for path in paths):
         raise ValueError("Pre-tokenized datasets currently support exactly one token file path.")
 

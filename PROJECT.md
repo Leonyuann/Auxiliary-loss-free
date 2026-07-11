@@ -201,4 +201,4 @@ Delivered so far:
 Remaining work:
 
 - Run the 8xA100 10-step acceptance check on the target A100 host.
-- Run the full 8xA100 throughput benchmark and validate Transformer Engine/grouped-GEMM/gradient-overlap numerical parity before enabling those performance paths.
+- Run the full 8xA100 throughput benchmark and extended local-vs-Transformer-Engine numerical parity suite.

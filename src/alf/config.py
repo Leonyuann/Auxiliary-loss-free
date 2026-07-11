@@ -223,6 +223,10 @@ class MegatronConfig:
         micro_batch_size: Per-rank micro batch size consumed by Megatron.
         global_batch_size: Global batch size across data-parallel workers.
         distributed_optimizer: Whether to use Megatron's distributed optimizer.
+        transformer_impl: Transformer layer backend, ``local`` or ``transformer_engine``.
+        moe_grouped_gemm: Whether local experts use grouped GEMM kernels.
+        overlap_grad_reduce: Whether DDP gradient reduction overlaps backward.
+        overlap_param_gather: Whether parameter gathering overlaps forward.
         moe_token_dispatcher_type: MoE token dispatcher name.
         recompute_granularity: Optional activation recompute granularity.
     """
@@ -236,6 +240,10 @@ class MegatronConfig:
     micro_batch_size: int = 2
     global_batch_size: int = 16
     distributed_optimizer: bool = True
+    transformer_impl: str = "transformer_engine"
+    moe_grouped_gemm: bool = True
+    overlap_grad_reduce: bool = True
+    overlap_param_gather: bool = True
     moe_token_dispatcher_type: str = "alltoall"
     recompute_granularity: str | None = None
 

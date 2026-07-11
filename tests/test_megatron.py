@@ -21,11 +21,13 @@ from alf.megatron_train import (
     _collect_megatron_load_observers,
     _install_megatron_load_observers,
     _load_megatron_rank_checkpoint,
+    _megatron_backward_scale,
     _resolve_megatron_resume_checkpoint,
     _save_megatron_rank_checkpoint,
     _megatron_clip_grad,
     _megatron_global_tokens,
     _post_megatron_optimizer_step,
+    _set_megatron_aux_loss_scale,
     _seed_megatron_model_parallel_rng,
     _step_megatron_optimizer,
     build_megatron_layer_spec,
@@ -52,6 +54,10 @@ def test_c4_1b_megatron_configs_use_ep4_dp2_top3_defaults() -> None:
         assert config.megatron.context_parallel_size == 1
         assert config.megatron.expert_model_parallel_size == 4
         assert config.megatron.data_parallel_size == 2
+        assert config.megatron.transformer_impl == "transformer_engine"
+        assert config.megatron.moe_grouped_gemm is True
+        assert config.megatron.overlap_grad_reduce is True
+        assert config.megatron.overlap_param_gather is True
         assert megatron_parallel_world_size(config) == 8
         assert config.model.num_experts == 24
         assert config.model.num_experts_per_tok == 3
@@ -140,6 +146,17 @@ def test_megatron_config_rejects_mismatched_effective_global_batch() -> None:
     import pytest
 
     with pytest.raises(ValueError, match="equal megatron.global_batch_size"):
+        validate_megatron_config(config)
+
+
+def test_megatron_config_rejects_unimplemented_model_parallel_degrees() -> None:
+    """The manual loop should reject TP, PP, or CP degrees above one."""
+
+    import pytest
+
+    config = load_experiment_config("experiments/qwen3_moe_c4_1b_megatron_alf.py")
+    config.megatron.tensor_model_parallel_size = 2
+    with pytest.raises(ValueError, match="requires megatron.tensor_model_parallel_size=1"):
         validate_megatron_config(config)
 
 
@@ -421,6 +438,45 @@ def test_megatron_core_alf_router_uses_accumulated_ema_update() -> None:
     assert torch.allclose(router.last_bias_delta, router.load_error_ema)
 
 
+def test_megatron_core_alf_router_honors_max_update_step() -> None:
+    """Megatron ALF bias should freeze after the configured absolute step."""
+
+    from megatron.core.transformer.transformer_config import TransformerConfig
+
+    config = ExperimentConfig(
+        name="tiny-megatron-max-step",
+        model=ModelConfig(
+            hidden_size=2, intermediate_size=4, num_hidden_layers=1,
+            num_attention_heads=1, num_key_value_heads=1, num_experts=4,
+            num_experts_per_tok=3,
+        ),
+        megatron=MegatronConfig(
+            enabled=True, expert_model_parallel_size=4, data_parallel_size=2,
+            transformer_impl="local", moe_grouped_gemm=False,
+            overlap_grad_reduce=False, overlap_param_gather=False,
+        ),
+        alf=AlfConfig(
+            enabled=True, bias_update_rate=1.0, bias_update_policy="sign",
+            bias_max_update_steps=1,
+        ),
+    )
+    kwargs = megatron_transformer_config_kwargs(config)
+    kwargs["perform_initialization"] = False
+    router = MegatronCoreAuxiliaryLossFreeTopKRouter(
+        config=TransformerConfig(**kwargs),
+        pg_collection=SimpleNamespace(tp=None, cp=None, tp_cp=None, tp_dp_cp=None),
+        alf_config=config.alf,
+    )
+    router.accumulated_expert_load.copy_(torch.tensor([3, 0, 0, 0]))
+    assert router.update_expert_bias_from_accumulated_load() is True
+    bias_after_first = router.expert_bias.clone()
+    router.accumulated_expert_load.copy_(torch.tensor([0, 3, 0, 0]))
+    assert router.update_expert_bias_from_accumulated_load() is False
+
+    assert router.training_steps.item() == 2
+    assert torch.equal(router.expert_bias, bias_after_first)
+
+
 def test_megatron_core_alf_router_reduces_load_over_expert_dp(monkeypatch) -> None:
     """Core router should reduce accumulated load once over expert-DP."""
 
@@ -586,6 +642,30 @@ def test_reduce_expert_load_counts_only_uses_explicit_group(monkeypatch) -> None
     assert reduce_expert_load_counts(local, reduce_group="tp_cp_dp").tolist() == [11, 12, 13]
 
 
+def test_megatron_aux_loss_scale_matches_gradient_accumulation() -> None:
+    """Injected auxiliary gradients should share main-loss GA scaling."""
+
+    class FakeOptimizer:
+        """Expose a deterministic mixed-precision loss scale."""
+
+        def get_loss_scale(self) -> torch.Tensor:
+            """Return the configured optimizer loss scale."""
+
+            return torch.tensor(8.0)
+
+    from megatron.core.transformer.moe.moe_utils import MoEAuxLossAutoScaler
+
+    scale = _megatron_backward_scale(FakeOptimizer(), 4, torch.device("cpu"))
+    _set_megatron_aux_loss_scale(scale)
+    activation = torch.ones((), requires_grad=True)
+    parameter = torch.ones((), requires_grad=True)
+    output = MoEAuxLossAutoScaler.apply(activation, parameter)
+    output.backward()
+
+    assert scale.item() == 2.0
+    assert parameter.grad.item() == 2.0
+
+
 def test_megatron_checkpoint_roundtrip_restores_training_and_router_state(tmp_path) -> None:
     """Rank checkpoints should restore model, optimizer, scheduler, and step."""
 
@@ -614,6 +694,16 @@ def test_megatron_checkpoint_roundtrip_restores_training_and_router_state(tmp_pa
     assert torch.allclose(model.weight, expected_weight)
     assert model.expert_bias.tolist() == [1.0, -1.0]
     assert scheduler.last_epoch == 1
+
+    _save_megatron_rank_checkpoint(
+        tmp_path, model, optimizer, scheduler, 8, config, attempt=10
+    )
+    import json
+    previous_metadata = json.loads(
+        (tmp_path / ".latest.previous" / "metadata.json").read_text(encoding="utf-8")
+    )
+    assert previous_metadata["step"] == 7
+    assert not (tmp_path / ".latest.incomplete").exists()
 
 
 def test_megatron_checkpoint_rejects_incomplete_metadata(tmp_path) -> None:
@@ -683,6 +773,8 @@ def test_megatron_load_observer_accumulates_across_microbatches() -> None:
 
     router = FakeTopKRouter()
     _install_megatron_load_observers(router)
+    from alf.megatron_train import _set_megatron_load_observation
+    _set_megatron_load_observation(router, True)
     router(torch.tensor([[True, False, True]]))
     router(torch.tensor([[False, True, True]]))
 

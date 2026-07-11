@@ -6,10 +6,13 @@ import importlib
 import json
 import math
 import os
+import random
+import shutil
 from functools import partial
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 import torch.distributed as dist
 from torch.nn import functional as F
@@ -17,7 +20,7 @@ from torch.utils.data import DataLoader, Subset
 from torch.utils.data.distributed import DistributedSampler
 
 from alf.config import ExperimentConfig, asdict, load_experiment_config, parse_config_args
-from alf.data import build_packed_text_dataset, causal_lm_collate
+from alf.data import build_packed_text_dataset
 from alf.metrics import (
     activation_matrix_from_counts,
     activation_rows_from_counts,
@@ -115,6 +118,14 @@ def validate_megatron_config(config: ExperimentConfig) -> None:
     for name, value in degrees.items():
         if int(value) <= 0:
             raise ValueError(f"megatron.{name} must be positive, got {value}.")
+    for name in ("tensor_model_parallel_size", "pipeline_model_parallel_size", "context_parallel_size"):
+        value = getattr(megatron, name)
+        if int(value) != 1:
+            raise ValueError(f"The current manual Megatron loop requires megatron.{name}=1; got {value}.")
+    if megatron.transformer_impl not in {"local", "transformer_engine"}:
+        raise ValueError("megatron.transformer_impl must be local or transformer_engine.")
+    if megatron.overlap_param_gather and not megatron.distributed_optimizer:
+        raise ValueError("overlap_param_gather requires megatron.distributed_optimizer=true.")
     expected_world_size = megatron_parallel_world_size(config)
     if "WORLD_SIZE" in os.environ:
         runtime_world_size = int(os.environ["WORLD_SIZE"])
@@ -181,8 +192,8 @@ def megatron_transformer_config_kwargs(config: ExperimentConfig) -> dict[str, An
         "add_bias_linear": False,
         "gated_linear_unit": True,
         "activation_func": F.silu,
-        "transformer_impl": "local",
-        "moe_grouped_gemm": False,
+        "transformer_impl": megatron.transformer_impl,
+        "moe_grouped_gemm": megatron.moe_grouped_gemm,
         "moe_router_enable_expert_bias": False,
         "moe_router_score_function": "softmax",
         "moe_router_bias_update_rate": 0.0,
@@ -201,13 +212,23 @@ def build_megatron_layer_spec(config: ExperimentConfig) -> Any:
     """
 
     _require_megatron_core()
-    from megatron.core.models.gpt.gpt_layer_specs import get_gpt_layer_local_spec
-
-    layer_spec = get_gpt_layer_local_spec(
-        num_experts=config.model.num_experts,
-        moe_grouped_gemm=False,
-        normalization="RMSNorm",
+    from megatron.core.models.gpt.gpt_layer_specs import (
+        get_gpt_layer_local_spec,
+        get_gpt_layer_with_transformer_engine_spec,
     )
+
+    spec_factory = (
+        get_gpt_layer_with_transformer_engine_spec
+        if config.megatron.transformer_impl == "transformer_engine"
+        else get_gpt_layer_local_spec
+    )
+    spec_kwargs = {
+        "num_experts": config.model.num_experts,
+        "moe_grouped_gemm": config.megatron.moe_grouped_gemm,
+    }
+    if config.megatron.transformer_impl == "local":
+        spec_kwargs["normalization"] = "RMSNorm"
+    layer_spec = spec_factory(**spec_kwargs)
     if config.alf.enabled:
         moe_submodules = layer_spec.submodules.mlp.keywords["submodules"]
         moe_submodules.router = partial(
@@ -332,7 +353,8 @@ def _run_megatron_training_loop(
 
         ddp_config = DistributedDataParallelConfig(
             grad_reduce_in_fp32=True,
-            overlap_grad_reduce=False,
+            overlap_grad_reduce=config.megatron.overlap_grad_reduce,
+            overlap_param_gather=config.megatron.overlap_param_gather,
             use_distributed_optimizer=config.megatron.distributed_optimizer,
         )
         model = MegatronDistributedDataParallel(
@@ -348,6 +370,7 @@ def _run_megatron_training_loop(
         paths=config.data.train_files,
         block_size=config.data.block_size,
         max_train_samples=config.data.max_train_samples,
+        include_labels=False,
     )
     sampler = _build_megatron_sampler(dataset, config)
     loader = DataLoader(
@@ -355,12 +378,11 @@ def _run_megatron_training_loop(
         batch_size=config.megatron.micro_batch_size,
         shuffle=sampler is None,
         sampler=sampler,
-        collate_fn=causal_lm_collate,
+        collate_fn=_megatron_causal_lm_collate,
         num_workers=config.training.num_workers,
         pin_memory=config.training.pin_memory,
         drop_last=config.training.drop_last,
     )
-    data_iter = _cycle(loader)
     optimizer = _build_megatron_training_optimizer(model, config)
     scheduler = _build_megatron_training_scheduler(optimizer, config)
     successful_step = 0
@@ -370,6 +392,11 @@ def _run_megatron_training_loop(
         successful_step, attempt = _load_megatron_rank_checkpoint(
             resume_checkpoint, metric_model, optimizer, scheduler, config, device
         )
+    data_iter = _cycle(
+        loader,
+        sampler=sampler,
+        start_batch=attempt * config.training.gradient_accumulation_steps,
+    )
 
     metrics_path = output_dir / "metrics.jsonl"
     logger = ExperimentLogger(
@@ -391,13 +418,12 @@ def _run_megatron_training_loop(
         while successful_step < config.training.max_steps:
             attempt += 1
             target_step = successful_step + 1
-            if sampler is not None:
-                sampler.set_epoch(attempt - 1)
             should_observe = (
                 target_step % config.training.log_every == 0
                 or target_step == config.training.max_steps
                 or all_to_all_profiler.enabled_for_step(target_step)
             )
+            _set_megatron_load_observation(metric_model, should_observe)
             if should_observe:
                 step_timer.start()
             all_to_all_profiler.start(target_step)
@@ -427,9 +453,15 @@ def _run_megatron_training_loop(
                         loss_mask=loss_mask,
                         padding_mask=padding_mask,
                     )
-                    loss = losses.float().mean() / config.training.gradient_accumulation_steps
-                    loss.backward()
-                loss_total.add_(loss.detach())
+                    unscaled_loss = losses.float().mean()
+                    backward_scale = _megatron_backward_scale(
+                        optimizer, config.training.gradient_accumulation_steps, device
+                    )
+                    _set_megatron_aux_loss_scale(backward_scale)
+                    (unscaled_loss * backward_scale).backward()
+                loss_total.add_(
+                    unscaled_loss.detach() / config.training.gradient_accumulation_steps
+                )
                 tokens += int(input_ids.numel())
             if _is_megatron_ddp(model):
                 model.finish_grad_sync()
@@ -887,6 +919,21 @@ def _step_megatron_optimizer(optimizer: Any, model: torch.nn.Module, max_grad_no
     return True, 0.0
 
 
+def _megatron_causal_lm_collate(
+    batch: list[dict[str, torch.Tensor]],
+) -> dict[str, torch.Tensor]:
+    """Collate only token blocks needed by the Megatron batch shifter.
+
+    Args:
+        batch: Token-file dataset items containing ``input_ids``.
+
+    Returns:
+        Stacked input token ids without redundant CPU labels or attention masks.
+    """
+
+    return {"input_ids": torch.stack([item["input_ids"] for item in batch])}
+
+
 def _prepare_megatron_batch(
     batch: dict[str, torch.Tensor],
     device: torch.device,
@@ -962,6 +1009,8 @@ def _install_megatron_load_observers(model: torch.nn.Module) -> None:
         if routing_map.dtype is not torch.bool or routing_map.ndim != 2:
             return
         with torch.no_grad():
+            if not module._alf_observe_loads:
+                return
             module._alf_observed_expert_load.add_(
                 routing_map.sum(dim=0).to(
                     device=module._alf_observed_expert_load.device,
@@ -991,8 +1040,22 @@ def _install_megatron_load_observers(model: torch.nn.Module) -> None:
                 persistent=False,
             )
             module._alf_observe_probabilities = False
+            module._alf_observe_loads = False
         if not hasattr(module, "_alf_observer_handle"):
             module._alf_observer_handle = module.register_forward_hook(observe_router_load)
+
+
+def _set_megatron_load_observation(model: torch.nn.Module, enabled: bool) -> None:
+    """Enable detached router load observation for selected steps.
+
+    Args:
+        model: Model containing installed router observers.
+        enabled: Whether forward hooks should accumulate routing maps.
+    """
+
+    for module in model.modules():
+        if hasattr(module, "_alf_observe_loads"):
+            module._alf_observe_loads = bool(enabled)
 
 
 def _reset_megatron_load_observers(model: torch.nn.Module) -> None:
@@ -1022,12 +1085,18 @@ def _set_megatron_probability_observation(model: torch.nn.Module, enabled: bool)
             module._alf_observe_probabilities = bool(enabled)
 
 
-def _collect_megatron_eval_aux_loss(model: torch.nn.Module, config: ExperimentConfig) -> float:
+def _collect_megatron_eval_aux_loss(
+    model: torch.nn.Module,
+    config: ExperimentConfig,
+    *,
+    reduce: bool = True,
+) -> float:
     """Compute raw validation auxiliary loss from global load/probability sums.
 
     Args:
         model: Model containing accumulated validation router observations.
         config: Experiment configuration defining experts, top-k, and aux mode.
+        reduce: Whether to reduce observations over expert data parallel ranks.
 
     Returns:
         Mean raw load-balancing auxiliary loss across MoE layers.
@@ -1044,7 +1113,7 @@ def _collect_megatron_eval_aux_loss(model: torch.nn.Module, config: ExperimentCo
         return 0.0
     counts = torch.stack([item[0] for item in observed])
     probability_sums = torch.stack([item[1] for item in observed])
-    if dist.is_available() and dist.is_initialized():
+    if reduce and dist.is_available() and dist.is_initialized():
         from megatron.core import parallel_state
 
         group = parallel_state.get_expert_data_parallel_group()
@@ -1088,6 +1157,59 @@ def _collect_megatron_load_observers(model: torch.nn.Module) -> dict[str, torch.
             group=parallel_state.get_expert_data_parallel_group(),
         )
     return {name: stacked[index].detach().cpu() for index, (name, _) in enumerate(observed)}
+
+
+def _snapshot_megatron_load_observers(
+    model: torch.nn.Module,
+) -> dict[str, torch.Tensor]:
+    """Clone local router counts without communication or CPU transfer.
+
+    Args:
+        model: Model containing installed router observers.
+
+    Returns:
+        Local device counts keyed by qualified router name.
+    """
+
+    return {
+        name: module._alf_observed_expert_load.detach().clone()
+        for name, module in model.named_modules()
+        if torch.is_tensor(getattr(module, "_alf_observed_expert_load", None))
+    }
+
+
+def _megatron_backward_scale(
+    optimizer: Any,
+    gradient_accumulation_steps: int,
+    device: torch.device,
+) -> torch.Tensor:
+    """Return the common LM and MoE-aux backward scale.
+
+    Args:
+        optimizer: Torch or Megatron optimizer.
+        gradient_accumulation_steps: Number of microbatches per optimizer update.
+        device: Device used by the backward scalar.
+
+    Returns:
+        Optimizer loss scale divided by gradient accumulation steps.
+    """
+
+    loss_scale = optimizer.get_loss_scale() if hasattr(optimizer, "get_loss_scale") else 1.0
+    return torch.as_tensor(loss_scale, device=device, dtype=torch.float32) / float(
+        gradient_accumulation_steps
+    )
+
+
+def _set_megatron_aux_loss_scale(scale: torch.Tensor) -> None:
+    """Set Megatron's injected MoE auxiliary-loss gradient scale.
+
+    Args:
+        scale: Scale matching the main loss backward call.
+    """
+
+    from megatron.core.transformer.moe.moe_utils import MoEAuxLossAutoScaler
+
+    MoEAuxLossAutoScaler.set_loss_scale(scale)
 
 
 def _clear_megatron_aux_metrics() -> None:
@@ -1184,6 +1306,7 @@ def _evaluate_megatron_model(
         paths=config.data.validation_files,
         block_size=config.data.block_size,
         max_train_samples=config.data.max_validation_samples,
+        include_labels=False,
     )
     if config.eval.max_eval_samples is not None:
         dataset = Subset(dataset, range(min(config.eval.max_eval_samples, len(dataset))))
@@ -1191,19 +1314,15 @@ def _evaluate_megatron_model(
     if dist.is_available() and dist.is_initialized():
         from megatron.core import parallel_state
 
-        sampler = DistributedSampler(
-            dataset,
-            num_replicas=parallel_state.get_expert_data_parallel_world_size(),
-            rank=parallel_state.get_expert_data_parallel_rank(),
-            shuffle=False,
-            drop_last=False,
-        )
+        eval_world_size = parallel_state.get_expert_data_parallel_world_size()
+        eval_rank = parallel_state.get_expert_data_parallel_rank()
+        dataset = Subset(dataset, range(eval_rank, len(dataset), eval_world_size))
     loader = DataLoader(
         dataset,
         batch_size=config.eval.eval_batch_size,
         shuffle=False,
         sampler=sampler,
-        collate_fn=causal_lm_collate,
+        collate_fn=_megatron_causal_lm_collate,
         num_workers=config.training.num_workers,
         pin_memory=config.training.pin_memory,
         drop_last=False,
@@ -1211,9 +1330,14 @@ def _evaluate_megatron_model(
     was_training = model.training
     model.eval()
     _reset_megatron_load_observers(model)
-    _set_megatron_probability_observation(model, True)
+    observe_aux_probabilities = not config.alf.enabled and float(config.model.router_aux_loss_coef) != 0.0
+    _set_megatron_load_observation(model, True)
+    _set_megatron_probability_observation(model, observe_aux_probabilities)
     total_loss_times_tokens = torch.zeros((), device=device, dtype=torch.float64)
     total_tokens = torch.zeros((), device=device, dtype=torch.long)
+    aux_loss_times_tokens = torch.zeros((), device=device, dtype=torch.float64)
+    aux_tokens = torch.zeros((), device=device, dtype=torch.long)
+    accumulated_counts: dict[str, torch.Tensor] = {}
     with torch.no_grad():
         for batch in loader:
             input_ids, labels, position_ids, loss_mask, padding_mask = _prepare_megatron_batch(batch, device)
@@ -1228,14 +1352,34 @@ def _evaluate_megatron_model(
             tokens = int(loss_mask.sum().item())
             total_loss_times_tokens.add_(losses.float().mean().double() * tokens)
             total_tokens.add_(tokens)
+            if observe_aux_probabilities:
+                batch_aux_loss = _collect_megatron_eval_aux_loss(model, config, reduce=False)
+                aux_loss_times_tokens.add_(batch_aux_loss * tokens)
+                aux_tokens.add_(tokens)
+            for name, counts in _snapshot_megatron_load_observers(model).items():
+                if name not in accumulated_counts:
+                    accumulated_counts[name] = counts
+                else:
+                    accumulated_counts[name].add_(counts)
+            _reset_megatron_load_observers(model)
+    if accumulated_counts:
+        count_names = list(accumulated_counts)
+        stacked_counts = torch.stack([accumulated_counts[name] for name in count_names])
+    else:
+        count_names = []
+        stacked_counts = torch.zeros((0, config.model.num_experts), device=device, dtype=torch.long)
     if dist.is_available() and dist.is_initialized():
         from megatron.core import parallel_state
 
         group = parallel_state.get_expert_data_parallel_group()
         dist.all_reduce(total_loss_times_tokens, op=dist.ReduceOp.SUM, group=group)
         dist.all_reduce(total_tokens, op=dist.ReduceOp.SUM, group=group)
-    raw_aux_loss = _collect_megatron_eval_aux_loss(model, config)
-    layer_counts = _collect_megatron_load_observers(model)
+        dist.all_reduce(aux_loss_times_tokens, op=dist.ReduceOp.SUM, group=group)
+        dist.all_reduce(aux_tokens, op=dist.ReduceOp.SUM, group=group)
+        if stacked_counts.numel():
+            dist.all_reduce(stacked_counts, op=dist.ReduceOp.SUM, group=group)
+    raw_aux_loss = float((aux_loss_times_tokens / aux_tokens.clamp_min(1)).item())
+    layer_counts = {name: stacked_counts[index].cpu() for index, name in enumerate(count_names)}
     _set_megatron_probability_observation(model, False)
     if was_training:
         model.train()
@@ -1297,7 +1441,44 @@ def _resolve_megatron_resume_checkpoint(
     if config.training.resume_from:
         return Path(config.training.resume_from)
     latest_checkpoint = output_dir / "latest"
-    return latest_checkpoint if latest_checkpoint.exists() else None
+    if latest_checkpoint.exists():
+        return latest_checkpoint
+    previous_checkpoint = output_dir / ".latest.previous"
+    return previous_checkpoint if previous_checkpoint.exists() else None
+
+
+def _capture_megatron_cuda_rng_state() -> dict[str, torch.Tensor] | None:
+    """Capture Megatron model-parallel CUDA RNG streams on CPU.
+
+    Returns:
+        Named RNG states, or ``None`` when CUDA is unavailable.
+    """
+
+    if not torch.cuda.is_available():
+        return None
+    from megatron.core.tensor_parallel.random import get_cuda_rng_tracker
+
+    return {name: state.detach().cpu() for name, state in get_cuda_rng_tracker().get_states().items()}
+
+
+def _restore_megatron_cuda_rng_state(
+    states: dict[str, torch.Tensor] | None,
+    device: torch.device,
+) -> None:
+    """Restore Megatron model-parallel CUDA RNG streams.
+
+    Args:
+        states: Named states captured in a rank checkpoint.
+        device: Current CUDA device; retained for the checkpoint restore interface.
+    """
+
+    if not states or not torch.cuda.is_available():
+        return
+    from megatron.core.tensor_parallel.random import get_cuda_rng_tracker
+
+    get_cuda_rng_tracker().set_states(
+        {name: state.cpu() for name, state in states.items()}
+    )
 
 
 def _distributed_optimizer_leaves(optimizer: Any) -> list[Any]:
@@ -1406,7 +1587,11 @@ def _save_megatron_rank_checkpoint(
 
     rank = dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
     world_size = _world_size()
-    checkpoint_dir = output_dir / "latest"
+    checkpoint_dir = output_dir / ".latest.incomplete"
+    if _is_global_rank_zero() and checkpoint_dir.exists():
+        shutil.rmtree(checkpoint_dir)
+    if dist.is_available() and dist.is_initialized():
+        dist.barrier()
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     if _is_global_rank_zero():
         metadata = {
@@ -1432,6 +1617,9 @@ def _save_megatron_rank_checkpoint(
         "optimizer_parameter_state": _capture_distributed_optimizer_parameter_state(optimizer),
         "scheduler": scheduler.state_dict(),
         "torch_rng_state": torch.get_rng_state(),
+        "python_rng_state": random.getstate(),
+        "numpy_rng_state": np.random.get_state(),
+        "megatron_cuda_rng_state": _capture_megatron_cuda_rng_state(),
     }
     if torch.cuda.is_available():
         state["cuda_rng_state"] = torch.cuda.get_rng_state()
@@ -1455,6 +1643,13 @@ def _save_megatron_rank_checkpoint(
         temporary_metadata_path = checkpoint_dir / ".metadata.json.tmp"
         temporary_metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
         os.replace(temporary_metadata_path, metadata_path)
+        latest_checkpoint = output_dir / "latest"
+        previous_checkpoint = output_dir / ".latest.previous"
+        if previous_checkpoint.exists():
+            shutil.rmtree(previous_checkpoint)
+        if latest_checkpoint.exists():
+            os.replace(latest_checkpoint, previous_checkpoint)
+        os.replace(checkpoint_dir, latest_checkpoint)
     if dist.is_available() and dist.is_initialized():
         dist.barrier()
 
@@ -1534,24 +1729,51 @@ def _load_megatron_rank_checkpoint(
     scheduler.load_state_dict(state["scheduler"])
     if "torch_rng_state" in state:
         torch.set_rng_state(state["torch_rng_state"].cpu())
+    if "python_rng_state" in state:
+        random.setstate(state["python_rng_state"])
+    if "numpy_rng_state" in state:
+        np.random.set_state(state["numpy_rng_state"])
+    if "megatron_cuda_rng_state" in state:
+        _restore_megatron_cuda_rng_state(state["megatron_cuda_rng_state"], device)
     if torch.cuda.is_available() and "cuda_rng_state" in state:
         torch.cuda.set_rng_state(state["cuda_rng_state"].cpu(), device=device)
     return int(state["step"]), int(state.get("attempt", state["step"]))
 
 
-def _cycle(loader: DataLoader) -> Any:
-    """Yield batches from a dataloader forever.
+def _cycle(
+    loader: DataLoader,
+    *,
+    sampler: DistributedSampler | None = None,
+    start_batch: int = 0,
+) -> Any:
+    """Yield deterministic data epochs and resume at a consumed-batch cursor.
 
     Args:
         loader: Source dataloader.
+        sampler: Optional distributed sampler whose epoch controls shuffling.
+        start_batch: Number of batches consumed by earlier optimizer attempts.
 
     Yields:
-        Batches from repeated dataloader passes.
+        Batches from deterministic repeated data epochs.
+
+    Raises:
+        ValueError: If the dataloader contains no batches.
     """
 
+    batches_per_epoch = len(loader)
+    if batches_per_epoch <= 0:
+        raise ValueError("Megatron training dataloader must contain at least one batch.")
+    epoch = int(start_batch) // batches_per_epoch
+    offset = int(start_batch) % batches_per_epoch
     while True:
-        for batch in loader:
+        if sampler is not None:
+            sampler.set_epoch(epoch)
+        for batch_index, batch in enumerate(loader):
+            if batch_index < offset:
+                continue
             yield batch
+        epoch += 1
+        offset = 0
 
 
 def _reduce_scalar(value: float | int, device: torch.device, dtype: torch.dtype) -> float:
@@ -1600,7 +1822,13 @@ def _reduce_system_metrics(metrics: dict[str, float], device: torch.device) -> d
         Metrics reduced with max across ranks.
     """
 
-    return {key: _reduce_max_scalar(value, device) for key, value in metrics.items()}
+    if not metrics:
+        return {}
+    keys = list(metrics)
+    values = torch.tensor([metrics[key] for key in keys], device=device, dtype=torch.float64)
+    if dist.is_available() and dist.is_initialized():
+        dist.all_reduce(values, op=dist.ReduceOp.MAX)
+    return {key: float(values[index].item()) for index, key in enumerate(keys)}
 
 
 def _megatron_global_tokens(local_tokens: int, config: ExperimentConfig) -> int:

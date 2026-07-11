@@ -211,10 +211,13 @@ if TopKRouter is not None:
             self.expert_bias_update_end_rate = float(_config_value(alf_config, "bias_update_end_rate", 0.0))
             self.expert_bias_clip = _config_value(alf_config, "bias_clip", None)
             self.expert_bias_warmup_steps = int(_config_value(alf_config, "warmup_steps", 0))
+            self.expert_bias_max_update_steps = _config_value(alf_config, "bias_max_update_steps", None)
             if self.expert_bias_update_schedule_steps is not None:
                 self.expert_bias_update_schedule_steps = int(self.expert_bias_update_schedule_steps)
             if self.expert_bias_clip is not None:
                 self.expert_bias_clip = float(self.expert_bias_clip)
+            if self.expert_bias_max_update_steps is not None:
+                self.expert_bias_max_update_steps = int(self.expert_bias_max_update_steps)
             self._validate_alf_state()
 
             num_experts = int(self.config.num_moe_experts)
@@ -245,6 +248,8 @@ if TopKRouter is not None:
                 raise ValueError("bias_update_topk must not exceed num_moe_experts.")
             if self.expert_bias_warmup_steps < 0:
                 raise ValueError("warmup_steps must be non-negative.")
+            if self.expert_bias_max_update_steps is not None and self.expert_bias_max_update_steps < 0:
+                raise ValueError("bias_max_update_steps must be non-negative or None.")
             if self.expert_bias_clip is not None and self.expert_bias_clip < 0.0:
                 raise ValueError("bias_clip must be non-negative.")
             if not 0.0 <= self.expert_bias_ema_beta < 1.0:
@@ -355,6 +360,11 @@ if TopKRouter is not None:
                 if self.expert_bias_update_rate == 0.0:
                     return
                 current_step = int(self.training_steps.item())
+                if (
+                    self.expert_bias_max_update_steps is not None
+                    and current_step > self.expert_bias_max_update_steps
+                ):
+                    return
                 if current_step <= self.expert_bias_warmup_steps:
                     return
                 target_fraction = torch.full_like(self.last_load_fraction, 1.0 / float(self.config.num_moe_experts))

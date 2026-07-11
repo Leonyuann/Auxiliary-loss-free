@@ -116,7 +116,9 @@ checkpoint exists. `--training.resume_from CHECKPOINT` selects a different check
 and takes precedence over the default. A checkpoint is published only after every
 rank shard is present, and resume validates world size and TP/PP/CP/EP/DP topology
 before restoring the model (including ALF/EMA router buffers), distributed optimizer,
-scheduler, successful optimizer-step count, attempt count, and torch RNG state.
+scheduler, successful optimizer-step count, deterministic data cursor, Python/NumPy/
+Torch RNG, and Megatron model-parallel CUDA RNG state. Checkpoints publish from a
+staging directory and retain the prior complete checkpoint during rotation.
 `training.max_steps` counts successful optimizer updates; overflow/skipped attempts
 do not advance the scheduler, ALF bias, logging step, evaluation, or checkpoint step,
 and 100 consecutive skips abort instead of looping silently.
@@ -125,14 +127,15 @@ Megatron training now reports native raw/scaled auxiliary loss, whole-global-bat
 expert load for both auxiliary-loss and ALF runs, and distributed validation
 loss/PPL/MaxVio/activation metrics. Router observation tensors and CUDA timing are
 materialized only on logging steps, and all ALF layer counts are reduced in one
-stacked expert-DP collective per optimizer update. Transformer Engine/grouped GEMM
-and gradient-reduce overlap remain disabled until their numerical compatibility with
-the custom softmax ALF router is accepted on the 8xA100 target.
+stacked expert-DP collective per optimizer update. Transformer Engine, grouped GEMM,
+gradient-reduce overlap, and distributed-optimizer parameter-gather overlap are enabled by default. The local/sequential path remains
+available through `MegatronConfig` overrides for debugging.
 
-Two-A100 EP=2 smokes have completed ALF training/evaluation/checkpoint save, a
-step-1-to-step-2 distributed-optimizer resume, and an auxiliary-loss run with
-nonzero train/eval auxiliary loss and expert loads. The full 8xA100 acceptance and
-throughput benchmark remain required before long experiments.
+Two-A100 EP=2 Transformer Engine/grouped-GEMM smokes have completed ALF
+training/evaluation/checkpoint save, a step-1-to-step-2 distributed-optimizer
+resume, and an auxiliary-loss run with nonzero train/eval auxiliary loss and expert
+loads. The full 8xA100 acceptance and throughput benchmark remain required before
+long experiments.
 
 ## W&B Observability
 
