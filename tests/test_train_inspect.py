@@ -199,6 +199,38 @@ def test_alf_bias_updates_once_per_optimizer_step_with_accumulation(tmp_path: Pa
     assert train_record["train"]["bias_update_events"] == 2
 
 
+def test_alf_bias_max_update_step_freezes_training_updates(tmp_path: Path) -> None:
+    """Training should stop reporting bias updates after the configured step."""
+
+    output_dir = tmp_path / "alf-max-bias-step"
+    train(
+        "experiments/qwen3_moe_tiny_alf.py",
+        [
+            "--training.max_steps",
+            "2",
+            "--training.output_dir",
+            str(output_dir),
+            "--training.save_every",
+            "2",
+            "--alf.bias_max_update_steps",
+            "1",
+            "--wandb.enabled",
+            "false",
+        ],
+    )
+
+    train_records = [
+        record
+        for record in (
+            json.loads(line)
+            for line in (output_dir / "metrics.jsonl").read_text(encoding="utf-8").splitlines()
+        )
+        if "train" in record
+    ]
+
+    assert [record["train"]["bias_update_events"] for record in train_records] == [2, 0]
+
+
 def test_validation_files_are_used_for_eval_metrics(tmp_path: Path) -> None:
     """Validation should use explicit validation files and validation sample limits."""
 

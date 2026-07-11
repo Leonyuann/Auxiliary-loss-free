@@ -57,6 +57,7 @@ config = ExperimentConfig(
         bias_clip=2.0,
         update_interval=1,
         warmup_steps=0,
+        bias_max_update_steps=None,
         disable_router_aux_loss=True,
     ),
     wandb=WandbConfig(

@@ -86,7 +86,8 @@ class FakeAlfConfig:
         bias_update_topk: Number of positive-error and negative-error experts
             updated by balanced top-k sign.
         bias_clip: Optional absolute bias clipping value.
-        warmup_steps: Number of forwards before updates begin.
+        warmup_steps: Number of optimizer steps before updates begin.
+        bias_max_update_steps: Optional last optimizer step allowed to update bias.
         disable_router_aux_loss: Whether to zero Qwen's router aux-loss coefficient.
     """
 
@@ -98,6 +99,7 @@ class FakeAlfConfig:
     bias_update_topk: int = 2
     bias_clip: float | None = 0.75
     warmup_steps: int = 2
+    bias_max_update_steps: int | None = 5
     disable_router_aux_loss: bool = False
 
 
@@ -118,6 +120,7 @@ def test_replace_qwen3_moe_routers_copies_router_weights_and_disables_aux_loss()
         expert_bias_update_interval=2,
         expert_bias_clip=0.5,
         expert_bias_warmup_steps=3,
+        expert_bias_max_update_steps=6,
     )
 
     routers = list(iter_auxiliary_loss_free_routers(model))
@@ -138,6 +141,7 @@ def test_replace_qwen3_moe_routers_copies_router_weights_and_disables_aux_loss()
         assert router.expert_bias_update_interval == 2
         assert router.expert_bias_clip == 0.5
         assert router.expert_bias_warmup_steps == 3
+        assert router.expert_bias_max_update_steps == 6
 
 
 def test_apply_aux_loss_free_router_reads_alf_config_object() -> None:
@@ -164,6 +168,7 @@ def test_apply_aux_loss_free_router_reads_alf_config_object() -> None:
         assert router.expert_bias_update_topk == 2
         assert router.expert_bias_clip == 0.75
         assert router.expert_bias_warmup_steps == 2
+        assert router.expert_bias_max_update_steps == 5
 
 
 def test_collect_auxiliary_loss_free_router_metrics_aggregates_serializable_values() -> None:

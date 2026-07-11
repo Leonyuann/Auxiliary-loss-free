@@ -61,6 +61,11 @@ uv run alf-train experiments/qwen3_moe_tiny_alf.py \
 Future schedules, such as cosine annealing, should be added through the same
 router schedule branch so all bias update policies share the new rate behavior.
 
+Set `bias_max_update_steps` to the last optimizer step that may change expert bias.
+For example, `bias_max_update_steps=1000` freezes bias after step 1000. The default
+`None` represents an infinite limit. This boundary uses the absolute optimizer-step
+count, including warmup steps, and is restored from router checkpoint state.
+
 The traditional auxiliary-loss baseline keeps the original Qwen3 router and uses a
 forward hook only to record expert load. That makes its load metrics comparable with
 ALF runs without changing the baseline routing behavior.

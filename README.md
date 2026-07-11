@@ -168,7 +168,9 @@ Supported ALF bias update policies:
 Bias update rate scheduling defaults to `--alf.bias_update_schedule constant`. Use
 `linear` with `--alf.bias_update_schedule_steps` to decay from
 `--alf.bias_update_rate` to `--alf.bias_update_end_rate` over post-warmup
-optimizer steps.
+optimizer steps. Set `--alf.bias_max_update_steps N` to allow updates through
+optimizer step `N` and freeze bias from step `N + 1`; the default `None` keeps
+updates enabled indefinitely.
 
 Checkpoints include the experiment config in `alf_experiment_config.json`, so a copied
 checkpoint directory can still be inspected with `alf-inspect-router`.

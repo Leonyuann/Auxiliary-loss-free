@@ -150,6 +150,8 @@ class AlfConfig:
         bias_clip: Optional absolute clipping limit for expert bias.
         update_interval: Number of optimizer steps between bias updates.
         warmup_steps: Number of optimizer steps before bias updates begin.
+        bias_max_update_steps: Optional last optimizer step allowed to update bias.
+            ``None`` keeps bias updates enabled indefinitely.
         disable_router_aux_loss: Whether to set the original router aux loss to zero.
     """
 
@@ -165,6 +167,7 @@ class AlfConfig:
     bias_clip: float | None = None
     update_interval: int = 1
     warmup_steps: int = 0
+    bias_max_update_steps: int | None = None
     disable_router_aux_loss: bool = True
 
 

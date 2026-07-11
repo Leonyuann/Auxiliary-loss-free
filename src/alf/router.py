@@ -48,6 +48,8 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         expert_bias_update_end_rate: Final bias update rate for scheduled decay.
         expert_bias_clip: Optional absolute clipping value for expert bias entries.
         expert_bias_warmup_steps: Number of optimizer steps to skip before updates.
+        expert_bias_max_update_steps: Optional last optimizer step allowed to update
+            expert bias. ``None`` allows updates indefinitely.
         weight: Router projection weights with shape `(num_experts, hidden_dim)`.
         expert_bias: Non-gradient bias applied only for top-k expert selection.
         training_steps: Number of optimizer-step bias update attempts seen by this router.
@@ -84,6 +86,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         expert_bias_update_end_rate: float = 0.0,
         expert_bias_clip: float | None = None,
         expert_bias_warmup_steps: int = 0,
+        expert_bias_max_update_steps: int | None = None,
     ) -> None:
         """Initialize the auxiliary-loss-free router.
 
@@ -107,6 +110,8 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
             expert_bias_update_end_rate: Final bias update rate for scheduled decay.
             expert_bias_clip: Optional symmetric clip magnitude for bias entries.
             expert_bias_warmup_steps: Number of optimizer steps to skip before updates.
+            expert_bias_max_update_steps: Optional last optimizer step allowed to
+                update expert bias. ``None`` allows updates indefinitely.
 
         Raises:
             ValueError: If any hyperparameter is inconsistent.
@@ -129,6 +134,12 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
             raise ValueError(msg)
         if expert_bias_warmup_steps < 0:
             msg = f"expert_bias_warmup_steps must be non-negative, got {expert_bias_warmup_steps}."
+            raise ValueError(msg)
+        if expert_bias_max_update_steps is not None and expert_bias_max_update_steps < 0:
+            msg = (
+                "expert_bias_max_update_steps must be non-negative or None, "
+                f"got {expert_bias_max_update_steps}."
+            )
             raise ValueError(msg)
         if expert_bias_clip is not None and expert_bias_clip < 0.0:
             msg = f"expert_bias_clip must be non-negative, got {expert_bias_clip}."
@@ -175,6 +186,9 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         self.expert_bias_update_end_rate = float(expert_bias_update_end_rate)
         self.expert_bias_clip = None if expert_bias_clip is None else float(expert_bias_clip)
         self.expert_bias_warmup_steps = int(expert_bias_warmup_steps)
+        self.expert_bias_max_update_steps = (
+            None if expert_bias_max_update_steps is None else int(expert_bias_max_update_steps)
+        )
 
         self.weight = nn.Parameter(torch.zeros(self.num_experts, self.hidden_dim))
         self.register_buffer(
@@ -224,6 +238,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         expert_bias_update_end_rate: float = 0.0,
         expert_bias_clip: float | None = None,
         expert_bias_warmup_steps: int = 0,
+        expert_bias_max_update_steps: int | None = None,
     ) -> "Qwen3MoeAuxiliaryLossFreeTopKRouter":
         """Build an auxiliary-loss-free router from an existing Qwen3 router.
 
@@ -241,6 +256,8 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
             expert_bias_update_end_rate: Final bias update rate for scheduled decay.
             expert_bias_clip: Optional symmetric clip magnitude for bias entries.
             expert_bias_warmup_steps: Number of optimizer steps to skip before updates.
+            expert_bias_max_update_steps: Optional last optimizer step allowed to
+                update expert bias. ``None`` allows updates indefinitely.
 
         Returns:
             A new router initialized with copied Qwen3 router weights.
@@ -265,6 +282,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
             expert_bias_update_end_rate=expert_bias_update_end_rate,
             expert_bias_clip=expert_bias_clip,
             expert_bias_warmup_steps=expert_bias_warmup_steps,
+            expert_bias_max_update_steps=expert_bias_max_update_steps,
         )
         replacement.to(device=router.weight.device, dtype=router.weight.dtype)
         with torch.no_grad():
@@ -341,6 +359,11 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
                 return
 
             current_step = int(self.training_steps.item())
+            if (
+                self.expert_bias_max_update_steps is not None
+                and current_step > self.expert_bias_max_update_steps
+            ):
+                return
             if current_step <= self.expert_bias_warmup_steps:
                 return
 

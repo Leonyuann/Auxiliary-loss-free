@@ -211,6 +211,7 @@ def replace_qwen3_moe_routers(
     expert_bias_update_end_rate: float = 0.0,
     expert_bias_clip: float | None = None,
     expert_bias_warmup_steps: int = 0,
+    expert_bias_max_update_steps: int | None = None,
     disable_original_router_aux_loss: bool = True,
 ) -> dict[str, Any]:
     """Replace compatible Qwen3 MoE routers with auxiliary-loss-free routers.
@@ -231,6 +232,8 @@ def replace_qwen3_moe_routers(
         expert_bias_update_end_rate: Final bias update rate for scheduled decay.
         expert_bias_clip: Optional symmetric clip magnitude for bias entries.
         expert_bias_warmup_steps: Number of optimizer steps to skip before updates.
+        expert_bias_max_update_steps: Optional last optimizer step allowed to update
+            expert bias. ``None`` allows updates indefinitely.
         disable_original_router_aux_loss: Whether to zero the original router
             auxiliary-loss coefficient when ALF routing is enabled.
 
@@ -267,6 +270,7 @@ def replace_qwen3_moe_routers(
             expert_bias_update_end_rate=expert_bias_update_end_rate,
             expert_bias_clip=expert_bias_clip,
             expert_bias_warmup_steps=expert_bias_warmup_steps,
+            expert_bias_max_update_steps=expert_bias_max_update_steps,
         )
         setattr(parent_module, child_name, replacement_router)
         replaced_router_paths.append(qualified_name)
@@ -308,7 +312,7 @@ def apply_aux_loss_free_router(model: nn.Module, alf_config: Any | None = None) 
             fields are `enabled`, `bias_init`, `bias_update_rate`,
             `bias_update_topk`, `bias_update_schedule`, `bias_update_schedule_steps`,
             `bias_update_end_rate`, `update_interval`, `bias_clip`, `warmup_steps`,
-            and `disable_router_aux_loss`.
+            `bias_max_update_steps`, and `disable_router_aux_loss`.
 
     Returns:
         A serializable summary with both replacement and patching aliases.
@@ -328,6 +332,7 @@ def apply_aux_loss_free_router(model: nn.Module, alf_config: Any | None = None) 
         expert_bias_update_end_rate=float(_config_value(alf_config, "bias_update_end_rate", 0.0)),
         expert_bias_clip=_config_value(alf_config, "bias_clip", None),
         expert_bias_warmup_steps=int(_config_value(alf_config, "warmup_steps", 0)),
+        expert_bias_max_update_steps=_config_value(alf_config, "bias_max_update_steps", None),
         disable_original_router_aux_loss=bool(_config_value(alf_config, "disable_router_aux_loss", True)),
     )
     summary["patched_routers"] = summary["num_replaced"]

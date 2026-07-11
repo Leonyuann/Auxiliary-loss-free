@@ -108,6 +108,53 @@ def test_bias_updates_only_during_training_and_tracks_load_direction_without_def
     assert router.last_expert_load.tolist() == [0, 4]
 
 
+def test_bias_stops_updating_after_max_optimizer_step() -> None:
+    """Bias should freeze after the configured optimizer-step boundary."""
+
+    router = Qwen3MoeAuxiliaryLossFreeTopKRouter(
+        hidden_size=2,
+        num_experts=2,
+        num_experts_per_tok=1,
+        norm_topk_prob=False,
+        expert_bias_update_rate=0.1,
+        expert_bias_update_policy="sign",
+        expert_bias_max_update_steps=1,
+    )
+    with torch.no_grad():
+        router.weight.zero_()
+        router.expert_bias.copy_(torch.tensor([0.0, 0.1]))
+
+    router.train()
+    hidden_states = torch.ones(4, 2)
+    router(hidden_states)
+    assert router.update_expert_bias_from_accumulated_load() is True
+    frozen_bias = router.expert_bias.detach().clone()
+
+    router(hidden_states)
+    assert router.update_expert_bias_from_accumulated_load() is False
+    assert torch.equal(router.expert_bias, frozen_bias)
+    assert torch.equal(router.last_bias_delta, torch.zeros(2))
+    assert int(router.training_steps.item()) == 2
+    assert int(router.bias_update_steps.item()) == 1
+
+
+def test_negative_bias_max_update_steps_raises() -> None:
+    """The bias update boundary must be non-negative when configured."""
+
+    try:
+        Qwen3MoeAuxiliaryLossFreeTopKRouter(
+            hidden_size=2,
+            num_experts=2,
+            num_experts_per_tok=1,
+            norm_topk_prob=False,
+            expert_bias_max_update_steps=-1,
+        )
+    except ValueError as error:
+        assert "expert_bias_max_update_steps" in str(error)
+    else:
+        raise AssertionError("Expected ValueError")
+
+
 def test_sign_bias_update_policy_uses_fixed_step_direction() -> None:
     """Sign policy should use fixed-size updates from load direction only."""
 
