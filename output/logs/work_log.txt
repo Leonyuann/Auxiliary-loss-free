@@ -385,3 +385,14 @@ Verification:
 - Two-A100 EP=2 Transformer Engine/grouped-GEMM ALF smoke completed training, evaluation, checkpoint save, and automatic step-1-to-step-2 distributed-optimizer resume; the previous complete checkpoint was retained.
 - Two-A100 EP=2 auxiliary-loss smoke with gradient accumulation completed with nonzero train/eval raw and scaled auxiliary loss, exact non-duplicated validation token count, expert loads, and MaxVio.
 - Full 8xA100 throughput remains an acceptance benchmark; the intentionally excluded Megatron-vs-DDP Qwen3 model-semantic mismatch was not changed.
+
+## 2026-07-12 - Fix Megatron launch auto-resume directories
+- Fixed malformed ALF and ALF-EMA command continuations in the 8xA100 launch script.
+- Assigned ALF, ALF-EMA, and auxiliary-loss runs distinct output directories below `OUTPUT_ROOT`, with `OUTPUT_DIR` retained as a compatibility alias.
+- Removed unconditional explicit resume paths so each run starts cleanly when no checkpoint exists and otherwise uses Megatron automatic `latest` or previous-checkpoint recovery.
+- Added `SAVE_EVERY` forwarding, a launch-script regression assertion, and README guidance for output and `MAX_STEPS` resume semantics.
+
+Verification:
+- `bash -n scripts/run_c4_1b_megatron_8xa100.sh` passed.
+- `env PYTHONPATH=src uv run pytest tests/test_megatron.py -q` passed with 29 tests.
+- `env PYTHONPATH=src uv run pytest -q` passed with 96 tests.

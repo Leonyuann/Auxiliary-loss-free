@@ -31,6 +31,11 @@ transformer_impl="${MEGATRON_TRANSFORMER_IMPL:-transformer_engine}"
 moe_grouped_gemm="${MOE_GROUPED_GEMM:-true}"
 overlap_grad_reduce="${OVERLAP_GRAD_REDUCE:-true}"
 overlap_param_gather="${OVERLAP_PARAM_GATHER:-true}"
+save_every="${SAVE_EVERY:-10000}"
+output_root="${OUTPUT_ROOT:-${OUTPUT_DIR:-$project_root/outputs}}"
+alf_output_dir="$output_root/qwen3_moe_c4_1b_megatron_alf"
+ema_output_dir="$output_root/qwen3_moe_c4_1b_megatron_alf_ema"
+aux_output_dir="$output_root/qwen3_moe_c4_1b_megatron_aux_loss"
 
 wandb_enabled="${WANDB_ENABLED:-true}"
 wandb_entity="${WANDB_ENTITY:-liangqingyuann-huazhong-university-of-science-and-technology}"
@@ -38,6 +43,7 @@ wandb_project="${WANDB_PROJECT:-Load-balance}"
 wandb_group="${WANDB_GROUP:-c4-1b-megatron}"
 
 common_overrides=(
+  --training.save_every "$save_every"
   --training.max_steps "$max_steps"
   --training.batch_size "$micro_batch_size"
   --training.gradient_accumulation_steps "$grad_accum"
@@ -64,16 +70,21 @@ common_overrides=(
 torchrun_args=(--standalone --nproc_per_node="$nproc_per_node" -m alf.megatron_train)
 
 if [[ "${RUN_ALF:-1}" == "1" ]]; then
-  "${train_cmd[@]}" "${torchrun_args[@]}" experiments/qwen3_moe_c4_1b_megatron_alf.py "${common_overrides[@]}"
+  "${train_cmd[@]}" "${torchrun_args[@]}" experiments/qwen3_moe_c4_1b_megatron_alf.py \
+    "${common_overrides[@]}" \
+    --training.output_dir "$alf_output_dir"
 fi
 
 if [[ "${RUN_EMA:-1}" == "1" ]]; then
   "${train_cmd[@]}" "${torchrun_args[@]}" experiments/qwen3_moe_c4_1b_megatron_alf_ema.py \
     "${common_overrides[@]}" \
     --alf.bias_ema_beta "${ALF_EMA_BETA:-0.5}" \
-    --alf.bias_update_rate "${ALF_EMA_RATE:-1e-1}"
+    --alf.bias_update_rate "${ALF_EMA_RATE:-1e-1}" \
+    --training.output_dir "$ema_output_dir"
 fi
 
 if [[ "${RUN_AUX:-0}" == "1" ]]; then
-  "${train_cmd[@]}" "${torchrun_args[@]}" experiments/qwen3_moe_c4_1b_megatron_aux_loss.py "${common_overrides[@]}"
+  "${train_cmd[@]}" "${torchrun_args[@]}" experiments/qwen3_moe_c4_1b_megatron_aux_loss.py \
+    "${common_overrides[@]}" \
+    --training.output_dir "$aux_output_dir"
 fi

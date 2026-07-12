@@ -99,7 +99,13 @@ RUN_ALF=1 RUN_EMA=0 RUN_AUX=0 MAX_STEPS=10 bash scripts/run_c4_1b_megatron_8xa10
 ```
 
 The launch script also accepts LR-related overrides such as `LR`/`LEARNING_RATE`,
-`WEIGHT_DECAY`, `WARMUP_STEPS`, `SCHEDULER_TYPE`, and `MAX_GRAD_NORM`.
+`WEIGHT_DECAY`, `WARMUP_STEPS`, `SCHEDULER_TYPE`, and `MAX_GRAD_NORM`, plus
+`SAVE_EVERY` and `OUTPUT_ROOT` (`OUTPUT_DIR` remains a compatibility alias for the
+output root). ALF, ALF-EMA, and auxiliary-loss runs write to distinct experiment
+subdirectories below that root. Each branch automatically resumes its own complete
+`latest` checkpoint when present, or starts from scratch when no checkpoint exists.
+`MAX_STEPS` is the final successful optimizer-step target, not the number of
+additional steps after resume.
 The Docker image uses a CUDA 12.9 compiler/Python 3.12 base and builds Transformer
 Engine 2.16.1 from the locked NVIDIA source. PyTorch and its CUDA 12.8 Python
 dependencies remain locked by `uv.lock`. The launch script selects the `te-build`

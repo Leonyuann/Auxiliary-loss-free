@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import torch
-
+from pathlib import Path
 from types import SimpleNamespace
+
+import torch
 
 from alf.config import AlfConfig, ExperimentConfig, MegatronConfig, ModelConfig, load_experiment_config
 from alf.megatron_router import (
@@ -64,6 +65,23 @@ def test_c4_1b_megatron_configs_use_ep4_dp2_top3_defaults() -> None:
         assert config.model.num_experts // config.megatron.expert_model_parallel_size == 6
         assert megatron_effective_global_batch_size(config) == config.megatron.global_batch_size == 16
         validate_megatron_config(config)
+
+
+def test_megatron_launch_uses_distinct_auto_resume_directories() -> None:
+    """Launch branches should use isolated output dirs and implicit latest resume."""
+
+    script = (
+        Path(__file__).resolve().parents[1] / "scripts/run_c4_1b_megatron_8xa100.sh"
+    ).read_text(encoding="utf-8")
+
+    assert 'output_root="${OUTPUT_ROOT:-${OUTPUT_DIR:-$project_root/outputs}}"' in script
+    assert 'alf_output_dir="$output_root/qwen3_moe_c4_1b_megatron_alf"' in script
+    assert 'ema_output_dir="$output_root/qwen3_moe_c4_1b_megatron_alf_ema"' in script
+    assert 'aux_output_dir="$output_root/qwen3_moe_c4_1b_megatron_aux_loss"' in script
+    assert '--training.output_dir "$alf_output_dir"' in script
+    assert '--training.output_dir "$ema_output_dir"' in script
+    assert '--training.output_dir "$aux_output_dir"' in script
+    assert "--training.resume_from" not in script
 
 
 def test_megatron_config_allows_consistent_two_gpu_smoke_topology(monkeypatch) -> None:
