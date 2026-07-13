@@ -1,9 +1,9 @@
-"""324M Qwen3 MoE C4 persistent-oscillation adaptive EMA experiment."""
+"""324M Qwen3 MoE C4 gain-coupled adaptive EMA experiment."""
 
 from alf.config import AlfConfig, DataConfig, EvalConfig, ExperimentConfig, ModelConfig, TrainingConfig, WandbConfig
 
 config = ExperimentConfig(
-    name="qwen3_moe_c4_300m_alf_adaptive_ema_persistent_oscillation",
+    name="qwen3_moe_c4_300m_alf_adaptive_ema_gain_coupled",
     model=ModelConfig(
         use_tiny_config=True,
         tokenizer_name_or_path="/vepfs-mlp2/ylq/tokenizers/owt_bpe_32k",
@@ -26,7 +26,7 @@ config = ExperimentConfig(
     ),
     eval=EvalConfig(eval_every=1000, eval_batch_size=32, max_eval_samples=2048),
     training=TrainingConfig(
-        output_dir="outputs/qwen3_moe_c4_300m_alf_adaptive_ema_persistent_oscillation",
+        output_dir="outputs/qwen3_moe_c4_300m_alf_adaptive_ema_gain_coupled",
         seed=42,
         max_steps=20_000,
         batch_size=128,
@@ -50,11 +50,14 @@ config = ExperimentConfig(
     alf=AlfConfig(
         enabled=True,
         bias_update_rate=1e-1,
-        bias_update_policy="adaptive_ema_persistent_oscillation",
+        bias_update_policy="adaptive_ema_gain_coupled",
         bias_adaptive_beta_min=0.25,
         bias_adaptive_beta_max=0.75,
         bias_adaptive_variance_reference=2.5e-3,
         bias_adaptive_state_decay=0.9,
+        bias_gain_coupled_normalized_gain=1.0 / 30.0,
+        bias_gain_coupled_rate_min=0.05,
+        bias_gain_coupled_rate_max=0.3,
         bias_update_schedule="constant",
         bias_init=0.0,
         bias_clip=2.0,
@@ -68,6 +71,6 @@ config = ExperimentConfig(
         entity="liangqingyuann-huazhong-university-of-science-and-technology",
         project="Load-balance",
         group="c4-300m",
-        tags=["alf", "adaptive-ema", "adaptive-ema-persistent-oscillation", "qwen3-moe", "c4", "300m-family", "324m", "16experts", "bpe32k", "ddp"],
+        tags=["alf", "adaptive-ema", "adaptive-ema-gain-coupled", "qwen3-moe", "c4", "300m-family", "324m", "16experts", "bpe32k", "ddp"],
     ),
 )

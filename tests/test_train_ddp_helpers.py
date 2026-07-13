@@ -73,6 +73,7 @@ def test_c4_configs_disable_gradient_checkpointing_for_fair_comparison() -> None
         "experiments/qwen3_moe_c4_300m_alf_ema.py",
         "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_variance.py",
         "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_persistent_oscillation.py",
+        "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_gain_coupled.py",
         "experiments/qwen3_moe_c4_300m_aux_loss.py",
     ]:
         config = load_experiment_config(path)
@@ -87,6 +88,7 @@ def test_c4_300m_configs_use_reasonable_moe_scale() -> None:
         "experiments/qwen3_moe_c4_300m_alf_ema.py",
         "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_variance.py",
         "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_persistent_oscillation.py",
+        "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_gain_coupled.py",
         "experiments/qwen3_moe_c4_300m_aux_loss.py",
     ]:
         config = load_experiment_config(path)
@@ -141,38 +143,59 @@ def test_c4_alf_bias_update_cadence_is_stable_for_accumulation() -> None:
 def test_adaptive_ema_experiment_configs_match_scale_defaults() -> None:
     """104M and 300M adaptive EMA configs should preserve their scale baselines."""
 
-    paths_and_rates = {
-        "experiments/qwen3_moe_owt_104m_alf_adaptive_ema_variance.py": (
-            "adaptive_ema_variance",
-            1e-1,
-            10_000,
-        ),
-        "experiments/qwen3_moe_owt_104m_alf_adaptive_ema_persistent_oscillation.py": (
-            "adaptive_ema_persistent_oscillation",
-            1e-1,
-            10_000,
-        ),
-        "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_variance.py": (
-            "adaptive_ema_variance",
-            5e-2,
-            20_000,
-        ),
-        "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_persistent_oscillation.py": (
-            "adaptive_ema_persistent_oscillation",
-            5e-2,
-            20_000,
-        ),
+    variance_paths = {
+        "experiments/qwen3_moe_owt_104m_alf_adaptive_ema_variance.py": (1e-1, 10_000),
+        "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_variance.py": (5e-2, 20_000),
     }
-
-    for path, (policy, update_rate, max_steps) in paths_and_rates.items():
+    for path, (update_rate, max_steps) in variance_paths.items():
         config = load_experiment_config(path)
-        assert config.alf.bias_update_policy == policy
+        assert config.alf.bias_update_policy == "adaptive_ema_variance"
         assert config.alf.bias_update_rate == update_rate
         assert config.alf.bias_adaptive_beta_min == 0.1
         assert config.alf.bias_adaptive_beta_max == 0.95
         assert config.alf.bias_adaptive_variance_reference == 2.5e-3
         assert config.alf.bias_adaptive_state_decay == 0.9
         assert config.training.max_steps == max_steps
+
+    ablation_paths = {
+        "experiments/qwen3_moe_owt_104m_alf_adaptive_ema_persistent_oscillation.py": (
+            "adaptive_ema_persistent_oscillation",
+            10_000,
+        ),
+        "experiments/qwen3_moe_owt_104m_alf_adaptive_ema_gain_coupled.py": (
+            "adaptive_ema_gain_coupled",
+            10_000,
+        ),
+        "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_persistent_oscillation.py": (
+            "adaptive_ema_persistent_oscillation",
+            20_000,
+        ),
+        "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_gain_coupled.py": (
+            "adaptive_ema_gain_coupled",
+            20_000,
+        ),
+    }
+    for path, (policy, max_steps) in ablation_paths.items():
+        config = load_experiment_config(path)
+        assert config.alf.bias_update_policy == policy
+        assert config.alf.bias_update_rate == 1e-1
+        assert config.alf.bias_adaptive_beta_min == 0.25
+        assert config.alf.bias_adaptive_beta_max == 0.75
+        assert config.alf.bias_adaptive_variance_reference == 2.5e-3
+        assert config.alf.bias_adaptive_state_decay == 0.9
+        assert config.training.seed == 42
+        assert config.training.max_steps == max_steps
+        if policy == "adaptive_ema_gain_coupled":
+            assert config.alf.bias_gain_coupled_normalized_gain == pytest.approx(1.0 / 30.0)
+            assert config.alf.bias_gain_coupled_rate_min == 0.05
+            assert config.alf.bias_gain_coupled_rate_max == 0.3
+
+    for scale in ("owt_104m", "c4_300m"):
+        config = load_experiment_config(f"experiments/qwen3_moe_{scale}_alf_ema.py")
+        assert config.alf.bias_update_policy == "ema"
+        assert config.alf.bias_ema_beta == 0.5
+        assert config.alf.bias_update_rate == 1e-1
+        assert config.training.seed == 42
 
 
 def test_adaptive_ema_experiments_are_exposed_by_baseline_scripts() -> None:
@@ -188,10 +211,26 @@ def test_adaptive_ema_experiments_are_exposed_by_baseline_scripts() -> None:
         content = (project_root / relative_path).read_text(encoding="utf-8")
         assert "RUN_ADAPTIVE_EMA_VARIANCE" in content
         assert "RUN_ADAPTIVE_EMA_PERSISTENT_OSCILLATION" in content
+        assert "RUN_ADAPTIVE_EMA_GAIN_COUPLED" in content
         assert f"{experiment_prefix}_alf_adaptive_ema_variance.py" in content
         assert f"{experiment_prefix}_alf_adaptive_ema_persistent_oscillation.py" in content
+        assert f"{experiment_prefix}_alf_adaptive_ema_gain_coupled.py" in content
         assert "bias_adaptive_beta_min" in content
         assert "bias_adaptive_variance_reference" in content
+        assert "bias_gain_coupled_normalized_gain" in content
+
+
+def test_owt_baseline_script_supports_multi_gpu_token_budget() -> None:
+    """OWT launcher should use torchrun and account for the full DDP token budget."""
+
+    project_root = Path(__file__).resolve().parents[1]
+    content = (project_root / "scripts/run_owt_104m_baselines.sh").read_text(encoding="utf-8")
+
+    assert 'train_cmd=(uv run torchrun)' in content
+    assert 'nproc_per_node="${NPROC_PER_NODE:-1}"' in content
+    assert 'grad_accum="${GRADIENT_ACCUMULATION_STEPS:-1}"' in content
+    assert "max_steps * batch_size * block_size * grad_accum * nproc_per_node" in content
+    assert 'torchrun_args=(--standalone --nproc_per_node="$nproc_per_node" -m alf.train)' in content
 
 
 def test_clip_or_measure_gradient_norm_clips_when_configured() -> None:

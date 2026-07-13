@@ -194,6 +194,9 @@ Supported ALF bias update policies:
   variance increases.
 - `adaptive_ema_persistent_oscillation`: lower beta for persistent load error
   and raise it for oscillating load error.
+- `adaptive_ema_gain_coupled`: reuse the persistent/oscillation beta estimator
+  and adapt the update rate to keep EMA-normalized feedback gain approximately
+  constant, subject to safety clipping.
 - `accumulated_sign`: accumulate load error over an interval, then apply a sign step.
 - `balanced_topk_sign`: update the most imbalanced positive and negative experts.
 
@@ -204,20 +207,34 @@ optimizer steps. Set `--alf.bias_max_update_steps N` to allow updates through
 optimizer step `N` and freeze bias from step `N + 1`; the default `None` keeps
 updates enabled indefinitely.
 
-The PyTorch baseline scripts expose both adaptive EMA policies as opt-in runs:
+The PyTorch baseline scripts expose the adaptive EMA policies as opt-in runs. For
+the strict same-commit, same-seed three-way comparison (fixed beta/fixed rate,
+adaptive beta/fixed rate, adaptive beta/gain-coupled rate), run:
 
 ```bash
-RUN_ALF=0 RUN_AUX=0 RUN_ADAPTIVE_EMA_VARIANCE=1 \
+RUN_ALF=0 RUN_AUX=0 RUN_EMA=1 \
+RUN_ADAPTIVE_EMA_PERSISTENT_OSCILLATION=1 \
+RUN_ADAPTIVE_EMA_GAIN_COUPLED=1 \
+SEED=42 NPROC_PER_NODE=2 WANDB_GROUP=owt-104m-gain-coupled-ablation \
   bash scripts/run_owt_104m_baselines.sh
 
-RUN_ALF=0 RUN_EMA=0 RUN_ADAPTIVE_EMA_PERSISTENT_OSCILLATION=1 \
+RUN_ALF=0 RUN_AUX=0 RUN_EMA=1 \
+RUN_ADAPTIVE_EMA_PERSISTENT_OSCILLATION=1 \
+RUN_ADAPTIVE_EMA_GAIN_COUPLED=1 \
+SEED=42 NPROC_PER_NODE=2 WANDB_GROUP=c4-300m-gain-coupled-ablation \
   bash scripts/run_c4_300m_baselines.sh
 ```
 
 Use `ALF_ADAPTIVE_BETA_MIN`, `ALF_ADAPTIVE_BETA_MAX`,
 `ALF_ADAPTIVE_VARIANCE_REFERENCE`, and `ALF_ADAPTIVE_STATE_DECAY` to override
-the shared adaptive defaults. These policies are currently implemented only in
-the Hugging Face/PyTorch training path, not the Megatron router adapter.
+the shared adaptive defaults. Use `ALF_NORMALIZED_GAIN`, `ALF_GAIN_RATE_MIN`, and
+`ALF_GAIN_RATE_MAX` for gain coupling. The comparison defaults are fixed EMA
+`beta=0.5, rate=0.1`, adaptive beta in `[0.25, 0.75]` with fixed rate `0.1`, and
+the same adaptive beta with target normalized gain `1/30` clipped to rates
+`[0.05, 0.3]`. `BATCH_SIZE` is per process; the OWT launcher automatically
+includes `NPROC_PER_NODE` and `GRADIENT_ACCUMULATION_STEPS` in its prepared token
+budget. These policies are currently implemented only in the Hugging Face/PyTorch
+training path, not the Megatron router adapter.
 
 Checkpoints include the experiment config in `alf_experiment_config.json`, so a copied
 checkpoint directory can still be inspected with `alf-inspect-router`.

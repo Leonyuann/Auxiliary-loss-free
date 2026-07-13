@@ -523,7 +523,15 @@ def summarize_auxiliary_loss_free_router(
             getattr(router, "expert_bias_adaptive_variance_reference", 2.5e-3)
         ),
         "adaptive_state_decay": float(getattr(router, "expert_bias_adaptive_state_decay", 0.9)),
+        "gain_coupled_normalized_gain": float(
+            getattr(router, "expert_bias_gain_coupled_normalized_gain", 1.0 / 30.0)
+        ),
+        "gain_coupled_rate_min": float(getattr(router, "expert_bias_gain_coupled_rate_min", 0.05)),
+        "gain_coupled_rate_max": float(getattr(router, "expert_bias_gain_coupled_rate_max", 0.3)),
         "adaptive_ema_beta": float(getattr(router, "last_adaptive_ema_beta", torch.tensor(0.0)).item()),
+        "normalized_feedback_gain": float(
+            getattr(router, "last_normalized_feedback_gain", torch.tensor(0.0)).item()
+        ),
         "normalized_load_variance": float(
             getattr(router, "last_normalized_load_variance", torch.tensor(0.0)).item()
         ),

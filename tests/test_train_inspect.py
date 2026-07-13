@@ -200,11 +200,12 @@ def test_alf_bias_updates_once_per_optimizer_step_with_accumulation(tmp_path: Pa
 
 
 def test_adaptive_ema_policies_log_dynamic_router_state(tmp_path: Path) -> None:
-    """Both adaptive EMA policies should run and expose their dynamic beta state."""
+    """Adaptive EMA policies should run and expose their dynamic controller state."""
 
     for policy in [
         "adaptive_ema_variance",
         "adaptive_ema_persistent_oscillation",
+        "adaptive_ema_gain_coupled",
     ]:
         output_dir = tmp_path / policy
         train(
@@ -237,6 +238,8 @@ def test_adaptive_ema_policies_log_dynamic_router_state(tmp_path: Path) -> None:
             assert 0.1 <= summary["adaptive_ema_beta"] <= 0.95
             assert summary["normalized_load_variance"] >= 0.0
             assert summary["load_batch_noise"] > 0.0
+            assert summary["normalized_feedback_gain"] >= 0.0
+            assert summary["gain_coupled_normalized_gain"] > 0.0
 
 
 def test_alf_bias_max_update_step_freezes_training_updates(tmp_path: Path) -> None:

@@ -44,6 +44,10 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         expert_bias_adaptive_variance_reference: Excess normalized load variance
             at the midpoint of the variance-adaptive beta mapping.
         expert_bias_adaptive_state_decay: Decay for persistent and oscillation energies.
+        expert_bias_gain_coupled_normalized_gain: Stability-normalized gain used
+            by the gain-coupled adaptive EMA policy.
+        expert_bias_gain_coupled_rate_min: Minimum gain-coupled update rate.
+        expert_bias_gain_coupled_rate_max: Maximum gain-coupled update rate.
         expert_bias_update_interval: Number of optimizer steps between bias updates.
         expert_bias_update_topk: Number of positive-error and negative-error experts
             updated by the ``balanced_topk_sign`` policy.
@@ -69,6 +73,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         "last_load_fraction",
         "last_bias_delta",
         "last_bias_update_rate",
+        "last_normalized_feedback_gain",
         "load_error_ema",
         "load_error_accumulator",
         "previous_load_error",
@@ -96,6 +101,9 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         expert_bias_adaptive_beta_max: float = 0.95,
         expert_bias_adaptive_variance_reference: float = 2.5e-3,
         expert_bias_adaptive_state_decay: float = 0.9,
+        expert_bias_gain_coupled_normalized_gain: float = 1.0 / 30.0,
+        expert_bias_gain_coupled_rate_min: float = 0.05,
+        expert_bias_gain_coupled_rate_max: float = 0.3,
         expert_bias_update_topk: int = 1,
         expert_bias_update_schedule: str = "constant",
         expert_bias_update_schedule_steps: int | None = None,
@@ -115,7 +123,8 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
             expert_bias_update_rate: Update magnitude used for load-balancing bias steps.
             expert_bias_update_policy: Bias update policy. Supported values are
                 `proportional`, `sign`, `ema`, `adaptive_ema_variance`,
-                `adaptive_ema_persistent_oscillation`, `accumulated_sign`, and
+                `adaptive_ema_persistent_oscillation`,
+                `adaptive_ema_gain_coupled`, `accumulated_sign`, and
                 `balanced_topk_sign`.
             expert_bias_update_interval: Number of optimizer steps between updates.
             expert_bias_adaptive_beta_min: Minimum adaptive EMA beta.
@@ -124,6 +133,10 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
                 at the midpoint of the variance-adaptive beta mapping.
             expert_bias_adaptive_state_decay: Decay for persistent and oscillation
                 energy estimates.
+            expert_bias_gain_coupled_normalized_gain: Stability-normalized gain
+                used by the gain-coupled adaptive EMA policy.
+            expert_bias_gain_coupled_rate_min: Minimum gain-coupled update rate.
+            expert_bias_gain_coupled_rate_max: Maximum gain-coupled update rate.
             expert_bias_update_topk: Number of positive-error and negative-error experts
                 updated by the ``balanced_topk_sign`` policy.
             expert_bias_update_schedule: Schedule used for bias update rates.
@@ -176,6 +189,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
             "ema",
             "adaptive_ema_variance",
             "adaptive_ema_persistent_oscillation",
+            "adaptive_ema_gain_coupled",
             "accumulated_sign",
             "balanced_topk_sign",
         }
@@ -197,6 +211,9 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
                 msg = "expert_bias_update_schedule_steps is required for linear bias update schedule."
                 raise ValueError(msg)
             _validate_positive("expert_bias_update_schedule_steps", expert_bias_update_schedule_steps)
+        if expert_bias_update_policy == "adaptive_ema_gain_coupled" and expert_bias_update_schedule != "constant":
+            msg = "adaptive_ema_gain_coupled requires a constant bias update schedule."
+            raise ValueError(msg)
         if not 0.0 <= expert_bias_ema_beta < 1.0:
             msg = f"expert_bias_ema_beta must satisfy 0 <= beta < 1, got {expert_bias_ema_beta}."
             raise ValueError(msg)
@@ -218,6 +235,18 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
                 f"got {expert_bias_adaptive_state_decay}."
             )
             raise ValueError(msg)
+        if expert_bias_gain_coupled_normalized_gain < 0.0:
+            msg = (
+                "expert_bias_gain_coupled_normalized_gain must be non-negative, "
+                f"got {expert_bias_gain_coupled_normalized_gain}."
+            )
+            raise ValueError(msg)
+        if not 0.0 <= expert_bias_gain_coupled_rate_min <= expert_bias_gain_coupled_rate_max:
+            msg = (
+                "gain-coupled rate bounds must satisfy 0 <= min <= max, got "
+                f"{expert_bias_gain_coupled_rate_min} and {expert_bias_gain_coupled_rate_max}."
+            )
+            raise ValueError(msg)
 
         self.top_k = int(num_experts_per_tok)
         self.num_experts = int(num_experts)
@@ -231,6 +260,9 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         self.expert_bias_adaptive_beta_max = float(expert_bias_adaptive_beta_max)
         self.expert_bias_adaptive_variance_reference = float(expert_bias_adaptive_variance_reference)
         self.expert_bias_adaptive_state_decay = float(expert_bias_adaptive_state_decay)
+        self.expert_bias_gain_coupled_normalized_gain = float(expert_bias_gain_coupled_normalized_gain)
+        self.expert_bias_gain_coupled_rate_min = float(expert_bias_gain_coupled_rate_min)
+        self.expert_bias_gain_coupled_rate_max = float(expert_bias_gain_coupled_rate_max)
         self.expert_bias_update_topk = int(expert_bias_update_topk)
         self.expert_bias_update_schedule = expert_bias_update_schedule
         self.expert_bias_update_schedule_steps = (
@@ -255,6 +287,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         self.register_buffer("last_load_fraction", torch.zeros(self.num_experts, dtype=torch.float32))
         self.register_buffer("last_bias_delta", torch.zeros(self.num_experts, dtype=torch.float32))
         self.register_buffer("last_bias_update_rate", torch.zeros((), dtype=torch.float32))
+        self.register_buffer("last_normalized_feedback_gain", torch.zeros((), dtype=torch.float32))
         self.register_buffer("load_error_ema", torch.zeros(self.num_experts, dtype=torch.float32))
         self.register_buffer("load_error_accumulator", torch.zeros(self.num_experts, dtype=torch.float32))
         self.register_buffer("previous_load_error", torch.zeros(self.num_experts, dtype=torch.float32))
@@ -300,6 +333,9 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         expert_bias_adaptive_beta_max: float = 0.95,
         expert_bias_adaptive_variance_reference: float = 2.5e-3,
         expert_bias_adaptive_state_decay: float = 0.9,
+        expert_bias_gain_coupled_normalized_gain: float = 1.0 / 30.0,
+        expert_bias_gain_coupled_rate_min: float = 0.05,
+        expert_bias_gain_coupled_rate_max: float = 0.3,
         expert_bias_update_topk: int = 1,
         expert_bias_update_schedule: str = "constant",
         expert_bias_update_schedule_steps: int | None = None,
@@ -322,6 +358,10 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
                 at the midpoint of the variance-adaptive beta mapping.
             expert_bias_adaptive_state_decay: Decay for persistent and oscillation
                 energy estimates.
+            expert_bias_gain_coupled_normalized_gain: Stability-normalized gain
+                used by the gain-coupled adaptive EMA policy.
+            expert_bias_gain_coupled_rate_min: Minimum gain-coupled update rate.
+            expert_bias_gain_coupled_rate_max: Maximum gain-coupled update rate.
             expert_bias_update_topk: Number of positive-error and negative-error experts
                 updated by the ``balanced_topk_sign`` policy.
             expert_bias_update_schedule: Schedule used for bias update rates.
@@ -354,6 +394,9 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
             expert_bias_adaptive_beta_max=expert_bias_adaptive_beta_max,
             expert_bias_adaptive_variance_reference=expert_bias_adaptive_variance_reference,
             expert_bias_adaptive_state_decay=expert_bias_adaptive_state_decay,
+            expert_bias_gain_coupled_normalized_gain=expert_bias_gain_coupled_normalized_gain,
+            expert_bias_gain_coupled_rate_min=expert_bias_gain_coupled_rate_min,
+            expert_bias_gain_coupled_rate_max=expert_bias_gain_coupled_rate_max,
             expert_bias_update_topk=expert_bias_update_topk,
             expert_bias_update_schedule=expert_bias_update_schedule,
             expert_bias_update_schedule_steps=expert_bias_update_schedule_steps,
@@ -419,6 +462,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
             if int(accumulated_load.sum().item()) == 0:
                 self.last_bias_delta.zero_()
                 self.last_bias_update_rate.zero_()
+                self.last_normalized_feedback_gain.zero_()
                 return False
             self._set_load_statistics(accumulated_load.to(device=self.last_expert_load.device, dtype=torch.long))
             previous_updates = int(self.bias_update_steps.item())
@@ -432,8 +476,13 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
             self.training_steps.add_(1)
             self.last_bias_delta.zero_()
             self.last_bias_update_rate.zero_()
+            self.last_normalized_feedback_gain.zero_()
 
-            if self.expert_bias_update_rate == 0.0:
+            if self.expert_bias_update_policy == "adaptive_ema_gain_coupled":
+                updates_disabled = self.expert_bias_gain_coupled_normalized_gain == 0.0
+            else:
+                updates_disabled = self.expert_bias_update_rate == 0.0
+            if updates_disabled:
                 return
 
             current_step = int(self.training_steps.item())
@@ -448,7 +497,9 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
             target_fraction = torch.full_like(self.last_load_fraction, 1.0 / float(self.num_experts))
             load_error = target_fraction - self.last_load_fraction
             steps_after_warmup = current_step - self.expert_bias_warmup_steps
-            update_rate = self._scheduled_bias_update_rate(steps_after_warmup)
+            update_rate = 0.0
+            if self.expert_bias_update_policy != "adaptive_ema_gain_coupled":
+                update_rate = self._scheduled_bias_update_rate(steps_after_warmup)
 
             if self.expert_bias_update_policy == "accumulated_sign":
                 self.load_error_accumulator.add_(
@@ -474,8 +525,11 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
                 elif self.expert_bias_update_policy in {
                     "adaptive_ema_variance",
                     "adaptive_ema_persistent_oscillation",
+                    "adaptive_ema_gain_coupled",
                 }:
                     self._update_adaptive_load_error_ema(load_error)
+                    if self.expert_bias_update_policy == "adaptive_ema_gain_coupled":
+                        update_rate = self._gain_coupled_update_rate()
                     bias_delta = update_rate * self.load_error_ema
                 else:
                     bias_delta = update_rate * load_error
@@ -485,6 +539,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
                 self.expert_bias.clamp_(-self.expert_bias_clip, self.expert_bias_clip)
             self.last_bias_delta.copy_(bias_delta.to(device=self.last_bias_delta.device, dtype=self.last_bias_delta.dtype))
             self.last_bias_update_rate.fill_(float(update_rate))
+            self.last_normalized_feedback_gain.fill_(self._normalized_feedback_gain(update_rate))
             self.bias_update_steps.add_(1)
 
     def _adaptive_load_statistics(self, load_error: Tensor) -> tuple[Tensor, Tensor, Tensor]:
@@ -529,8 +584,14 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
             previous_error = torch.where(initialized, self.previous_load_error, load_error)
             persistent = 0.5 * (load_error + previous_error)
             oscillatory = 0.5 * (load_error - previous_error)
-            persistent_energy = float(self.num_experts) * persistent.square().sum()
-            oscillation_energy = float(self.num_experts) * oscillatory.square().sum()
+            split_noise_floor = 0.5 * batch_noise
+            persistent_energy = (
+                float(self.num_experts) * persistent.square().sum() - split_noise_floor
+            ).clamp_min(0.0)
+            oscillation_energy = (
+                float(self.num_experts) * oscillatory.square().sum()
+                - split_noise_floor
+            ).clamp_min(0.0)
             decay = self.expert_bias_adaptive_state_decay
             smoothed_persistent = torch.where(
                 initialized,
@@ -556,6 +617,42 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         self.previous_load_error.copy_(load_error)
         self.adaptive_state_initialized.fill_(True)
         self.last_adaptive_ema_beta.copy_(beta)
+
+    def _gain_coupled_update_rate(self) -> float:
+        """Compute the clipped update rate that preserves normalized gain.
+
+        Returns:
+            Dynamic bias update rate for the current adaptive beta.
+        """
+
+        beta = float(self.last_adaptive_ema_beta.item())
+        update_rate = self.expert_bias_gain_coupled_normalized_gain * (1.0 + beta) / (1.0 - beta)
+        return min(
+            max(update_rate, self.expert_bias_gain_coupled_rate_min),
+            self.expert_bias_gain_coupled_rate_max,
+        )
+
+    def _normalized_feedback_gain(self, update_rate: float) -> float:
+        """Compute the realized stability-normalized feedback gain.
+
+        Args:
+            update_rate: Bias update rate used for the current update.
+
+        Returns:
+            Realized gain for EMA-based policies, or zero otherwise.
+        """
+
+        if self.expert_bias_update_policy == "ema":
+            beta = self.expert_bias_ema_beta
+        elif self.expert_bias_update_policy in {
+            "adaptive_ema_variance",
+            "adaptive_ema_persistent_oscillation",
+            "adaptive_ema_gain_coupled",
+        }:
+            beta = float(self.last_adaptive_ema_beta.item())
+        else:
+            return 0.0
+        return update_rate * (1.0 - beta) / (1.0 + beta)
 
     def _scheduled_bias_update_rate(self, steps_after_warmup: int) -> float:
         """Compute the bias update rate for the current post-warmup step.

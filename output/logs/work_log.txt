@@ -409,3 +409,19 @@ Verification:
 - `env PYTHONPATH=src uv run pytest tests/test_router.py tests/test_modeling.py tests/test_config.py tests/test_train_ddp_helpers.py tests/test_train_inspect.py -q` passed with 52 tests.
 - `env PYTHONPATH=src uv run pytest -q` passed with 103 tests.
 - `git diff --check` passed.
+
+## 2026-07-13 - Add stability-normalized adaptive EMA control
+- Added `adaptive_ema_gain_coupled`, reusing the noise-corrected persistent/oscillation beta estimator while adapting the update rate to preserve clipped stability-normalized feedback gain.
+- Added FP32 checkpointed realized-gain state and JSONL/W&B metrics for target gain, rate bounds, actual update rate, and actual normalized gain.
+- Synchronized fixed-EMA, adaptive-beta/fixed-rate, and adaptive-beta/gain-coupled ablations across the 104M OWT and 300M C4 experiment families with seed 42.
+- Set the controlled comparison defaults to fixed EMA beta 0.5/rate 0.1, adaptive beta bounds [0.25, 0.75], normalized gain 1/30, and dynamic rate bounds [0.05, 0.3].
+- Converted the OWT baseline launcher to `torchrun`, preserved one-process default behavior, and included world size plus gradient accumulation in token preparation.
+- Documented the controller equation, W&B fields, strict three-way launch commands, and PyTorch-only scope.
+
+Verification:
+- Programmatic config comparison confirmed identical model, data, evaluation, and training settings apart from output directories for each scale.
+- `bash -n scripts/run_owt_104m_baselines.sh` and `bash -n scripts/run_c4_300m_baselines.sh` passed.
+- `env PYTHONPATH=src uv run python -m compileall -q src tests experiments` passed.
+- `env PYTHONPATH=src uv run pytest tests/test_router.py tests/test_modeling.py tests/test_config.py tests/test_train_ddp_helpers.py tests/test_train_inspect.py -q` passed with 55 tests.
+- `env PYTHONPATH=src uv run pytest -q` passed with 108 tests and 26 existing dependency/environment warnings.
+- `git diff --check` passed.

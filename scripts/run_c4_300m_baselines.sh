@@ -24,6 +24,7 @@ nproc_per_node="${NPROC_PER_NODE:-2}"
 block_size="${BLOCK_SIZE:-512}"
 batch_size="${BATCH_SIZE:-128}"
 grad_accum="${GRADIENT_ACCUMULATION_STEPS:-2}"
+seed="${SEED:-42}"
 max_steps="${MAX_STEPS:-20000}"
 train_tokens="${C4_TRAIN_TOKENS:-6000000000}"
 validation_tokens="${C4_VALIDATION_TOKENS:-16777216}"
@@ -54,6 +55,7 @@ common_overrides=(
   --training.max_steps "$max_steps"
   --training.batch_size "$batch_size"
   --training.gradient_accumulation_steps "$grad_accum"
+  --training.seed "$seed"
   --data.block_size "$block_size"
   --data.train_files "$train_token_file"
   --data.validation_files "$validation_token_file"
@@ -63,9 +65,16 @@ common_overrides=(
   --wandb.group "$wandb_group"
 )
 
-adaptive_ema_overrides=(
+variance_ema_overrides=(
   --alf.bias_adaptive_beta_min "${ALF_ADAPTIVE_BETA_MIN:-0.1}"
   --alf.bias_adaptive_beta_max "${ALF_ADAPTIVE_BETA_MAX:-0.95}"
+  --alf.bias_adaptive_variance_reference "${ALF_ADAPTIVE_VARIANCE_REFERENCE:-2.5e-3}"
+  --alf.bias_adaptive_state_decay "${ALF_ADAPTIVE_STATE_DECAY:-0.9}"
+)
+
+persistent_ema_overrides=(
+  --alf.bias_adaptive_beta_min "${ALF_ADAPTIVE_BETA_MIN:-0.25}"
+  --alf.bias_adaptive_beta_max "${ALF_ADAPTIVE_BETA_MAX:-0.75}"
   --alf.bias_adaptive_variance_reference "${ALF_ADAPTIVE_VARIANCE_REFERENCE:-2.5e-3}"
   --alf.bias_adaptive_state_decay "${ALF_ADAPTIVE_STATE_DECAY:-0.9}"
 )
@@ -80,21 +89,31 @@ if [[ "${RUN_EMA:-1}" == "1" ]]; then
   "${train_cmd[@]}" "${torchrun_args[@]}" experiments/qwen3_moe_c4_300m_alf_ema.py \
     "${common_overrides[@]}" \
     --alf.bias_ema_beta "${ALF_EMA_BETA:-0.5}" \
-    --alf.bias_update_rate "${ALF_EMA_RATE:-5e-2}"
+    --alf.bias_update_rate "${ALF_EMA_RATE:-1e-1}"
 fi
 
 if [[ "${RUN_ADAPTIVE_EMA_VARIANCE:-0}" == "1" ]]; then
   "${train_cmd[@]}" "${torchrun_args[@]}" experiments/qwen3_moe_c4_300m_alf_adaptive_ema_variance.py \
     "${common_overrides[@]}" \
-    "${adaptive_ema_overrides[@]}" \
-    --alf.bias_update_rate "${ALF_ADAPTIVE_EMA_RATE:-5e-2}"
+    "${variance_ema_overrides[@]}" \
+    --alf.bias_update_rate "${ALF_VARIANCE_EMA_RATE:-5e-2}"
 fi
 
 if [[ "${RUN_ADAPTIVE_EMA_PERSISTENT_OSCILLATION:-0}" == "1" ]]; then
   "${train_cmd[@]}" "${torchrun_args[@]}" experiments/qwen3_moe_c4_300m_alf_adaptive_ema_persistent_oscillation.py \
     "${common_overrides[@]}" \
-    "${adaptive_ema_overrides[@]}" \
-    --alf.bias_update_rate "${ALF_ADAPTIVE_EMA_RATE:-5e-2}"
+    "${persistent_ema_overrides[@]}" \
+    --alf.bias_update_rate "${ALF_ADAPTIVE_EMA_RATE:-1e-1}"
+fi
+
+if [[ "${RUN_ADAPTIVE_EMA_GAIN_COUPLED:-0}" == "1" ]]; then
+  "${train_cmd[@]}" "${torchrun_args[@]}" experiments/qwen3_moe_c4_300m_alf_adaptive_ema_gain_coupled.py \
+    "${common_overrides[@]}" \
+    "${persistent_ema_overrides[@]}" \
+    --alf.bias_update_rate "${ALF_ADAPTIVE_EMA_RATE:-1e-1}" \
+    --alf.bias_gain_coupled_normalized_gain "${ALF_NORMALIZED_GAIN:-0.03333333333333333}" \
+    --alf.bias_gain_coupled_rate_min "${ALF_GAIN_RATE_MIN:-0.05}" \
+    --alf.bias_gain_coupled_rate_max "${ALF_GAIN_RATE_MAX:-0.3}"
 fi
 
 if [[ "${RUN_AUX:-0}" == "1" ]]; then

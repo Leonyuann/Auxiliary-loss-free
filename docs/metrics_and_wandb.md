@@ -47,6 +47,14 @@ Paper and routing metrics:
 - `train/expert_activation/heatmap`: layer-by-expert training activation heatmap.
 - `eval/expert_activation/heatmap`: layer-by-expert validation activation heatmap.
 
+Adaptive-controller router summaries are flattened below each router path. Important
+fields include `adaptive_ema_beta`, `last_bias_update_rate`,
+`normalized_feedback_gain`, `persistent_energy_ema`, `oscillation_energy_ema`,
+`normalized_load_variance`, and `load_batch_noise`. The gain-coupled policy also
+records its configured `gain_coupled_normalized_gain`, `gain_coupled_rate_min`, and
+`gain_coupled_rate_max`. Compare `normalized_feedback_gain` with the target to see
+when rate clipping is active.
+
 ## Local JSONL
 
 Every run also writes `metrics.jsonl` under the experiment output directory. This

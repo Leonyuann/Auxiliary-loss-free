@@ -202,3 +202,29 @@ Remaining work:
 
 - Run the 8xA100 10-step acceptance check on the target A100 host.
 - Run the full 8xA100 throughput benchmark and extended local-vs-Transformer-Engine numerical parity suite.
+
+## Sprint 8: Stability-Normalized Adaptive EMA
+
+Status: complete.
+
+Passes: true.
+
+Goal: isolate adaptive EMA memory from adaptive controller gain in controlled
+104M OWT and 300M C4 experiments.
+
+Deliverables:
+
+- Add a gain-coupled adaptive EMA policy that reuses the persistent/oscillation
+  beta estimator and controls the stability-normalized feedback gain.
+- Synchronize fixed-EMA, adaptive-beta/fixed-rate, and adaptive-beta/gain-coupled
+  configs across the 104M and 300M experiment families.
+- Expose controller beta, realized update rate, and normalized feedback gain in
+  local JSONL and W&B router metrics.
+- Enable multi-GPU `torchrun` execution in the OWT baseline launcher and include
+  world size plus gradient accumulation in token preparation.
+
+Acceptance criteria:
+
+- The gain-coupled policy preserves persistent/oscillation beta state exactly.
+- Both scale launchers expose the same three-way ablation with seed overrides.
+- `uv run pytest` and launcher syntax checks pass.

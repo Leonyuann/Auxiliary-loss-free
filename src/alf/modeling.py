@@ -209,6 +209,9 @@ def replace_qwen3_moe_routers(
     expert_bias_adaptive_beta_max: float = 0.95,
     expert_bias_adaptive_variance_reference: float = 2.5e-3,
     expert_bias_adaptive_state_decay: float = 0.9,
+    expert_bias_gain_coupled_normalized_gain: float = 1.0 / 30.0,
+    expert_bias_gain_coupled_rate_min: float = 0.05,
+    expert_bias_gain_coupled_rate_max: float = 0.3,
     expert_bias_update_topk: int = 1,
     expert_bias_update_schedule: str = "constant",
     expert_bias_update_schedule_steps: int | None = None,
@@ -234,6 +237,10 @@ def replace_qwen3_moe_routers(
             at the midpoint of the variance-adaptive beta mapping.
         expert_bias_adaptive_state_decay: Decay for persistent and oscillation
             energy estimates.
+        expert_bias_gain_coupled_normalized_gain: Stability-normalized gain
+            used by the gain-coupled adaptive EMA policy.
+        expert_bias_gain_coupled_rate_min: Minimum gain-coupled update rate.
+        expert_bias_gain_coupled_rate_max: Maximum gain-coupled update rate.
         expert_bias_update_topk: Number of positive-error and negative-error experts
             updated by the ``balanced_topk_sign`` policy.
         expert_bias_update_schedule: Schedule used for bias update rates.
@@ -278,6 +285,9 @@ def replace_qwen3_moe_routers(
             expert_bias_adaptive_beta_max=expert_bias_adaptive_beta_max,
             expert_bias_adaptive_variance_reference=expert_bias_adaptive_variance_reference,
             expert_bias_adaptive_state_decay=expert_bias_adaptive_state_decay,
+            expert_bias_gain_coupled_normalized_gain=expert_bias_gain_coupled_normalized_gain,
+            expert_bias_gain_coupled_rate_min=expert_bias_gain_coupled_rate_min,
+            expert_bias_gain_coupled_rate_max=expert_bias_gain_coupled_rate_max,
             expert_bias_update_topk=expert_bias_update_topk,
             expert_bias_update_schedule=expert_bias_update_schedule,
             expert_bias_update_schedule_steps=expert_bias_update_schedule_steps,
@@ -326,6 +336,7 @@ def apply_aux_loss_free_router(model: nn.Module, alf_config: Any | None = None) 
             fields are `enabled`, `bias_init`, `bias_update_rate`,
             `bias_update_topk`, `bias_update_schedule`, `bias_update_schedule_steps`,
             `bias_update_end_rate`, adaptive-beta settings, `update_interval`,
+            gain-coupled settings,
             `bias_clip`, `warmup_steps`, `bias_max_update_steps`, and
             `disable_router_aux_loss`.
 
@@ -347,6 +358,15 @@ def apply_aux_loss_free_router(model: nn.Module, alf_config: Any | None = None) 
             _config_value(alf_config, "bias_adaptive_variance_reference", 2.5e-3)
         ),
         expert_bias_adaptive_state_decay=float(_config_value(alf_config, "bias_adaptive_state_decay", 0.9)),
+        expert_bias_gain_coupled_normalized_gain=float(
+            _config_value(alf_config, "bias_gain_coupled_normalized_gain", 1.0 / 30.0)
+        ),
+        expert_bias_gain_coupled_rate_min=float(
+            _config_value(alf_config, "bias_gain_coupled_rate_min", 0.05)
+        ),
+        expert_bias_gain_coupled_rate_max=float(
+            _config_value(alf_config, "bias_gain_coupled_rate_max", 0.3)
+        ),
         expert_bias_update_topk=int(_config_value(alf_config, "bias_update_topk", 1)),
         expert_bias_update_schedule=str(_config_value(alf_config, "bias_update_schedule", "constant")),
         expert_bias_update_schedule_steps=_config_value(alf_config, "bias_update_schedule_steps", None),

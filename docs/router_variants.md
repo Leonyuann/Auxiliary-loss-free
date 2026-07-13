@@ -48,10 +48,13 @@ persistent and oscillating components:
 ```text
 persistent = (error_t + error_t_minus_1) / 2
 oscillating = (error_t - error_t_minus_1) / 2
-persistent_energy = E * sum(persistent ** 2)
-oscillation_energy = E * sum(oscillating ** 2)
-beta = (smoothed_oscillation_energy + batch_noise) /
-       (smoothed_persistent_energy + smoothed_oscillation_energy + batch_noise)
+batch_noise = (E - 1) / N
+persistent_signal = max(E * sum(persistent ** 2) - batch_noise / 2, 0)
+oscillation_signal = max(E * sum(oscillating ** 2) - batch_noise / 2, 0)
+persistent_energy = EMA(persistent_signal, energy_state_decay)
+oscillation_energy = EMA(oscillation_signal, energy_state_decay)
+beta = (oscillation_energy + batch_noise) /
+       (persistent_energy + oscillation_energy + batch_noise)
 ```
 
 The resulting beta is clipped to `bias_adaptive_beta_min` and
@@ -60,9 +63,27 @@ variance reference is `2.5e-3`, energy-state decay is `0.9`, and beta bounds are
 `0.1` and `0.95`. All adaptive state is stored as router buffers, preserved by
 checkpoints, and kept in FP32 when model weights use BF16. Router metrics expose
 the dynamic beta, raw/excess normalized variance, finite-batch noise, and the two
-energy estimates for JSONL and W&B analysis.
+noise-corrected energy estimates for JSONL and W&B analysis.
 
-Both adaptive policies are currently specific to the Hugging Face/PyTorch path.
+`adaptive_ema_gain_coupled` is the first-stage adaptive controller. It deliberately
+reuses the complete persistent/oscillation beta estimator above, but couples the
+bias update rate to the selected beta:
+
+```text
+normalized_gain = update_rate * (1 - beta) / (1 + beta)
+update_rate = clip(normalized_gain_target * (1 + beta) / (1 - beta),
+                   rate_min, rate_max)
+```
+
+The synchronized 104M and 300M configs use `normalized_gain_target=1/30`,
+`rate_min=0.05`, `rate_max=0.3`, and beta bounds `[0.25, 0.75]`. The target is
+anchored to the fixed-EMA reference point because beta `0.5` and update rate
+`0.1` produce normalized gain `1/30`. Rate clipping is a safety bound; when it
+activates, the realized normalized gain is logged rather than reported as the
+unclipped target. The policy requires a constant rate schedule because its rate
+is already controlled online.
+
+All adaptive policies are currently specific to the Hugging Face/PyTorch path.
 Megatron configs continue to accept the existing fixed-beta `ema` policy only.
 
 `balanced_topk_sign` keeps the original signed ALF direction but updates only a
