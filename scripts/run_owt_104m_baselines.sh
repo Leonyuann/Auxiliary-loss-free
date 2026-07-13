@@ -71,6 +71,13 @@ common_overrides=(
   --data.validation_files "$validation_token_file"
 )
 
+adaptive_ema_overrides=(
+  --alf.bias_adaptive_beta_min "${ALF_ADAPTIVE_BETA_MIN:-0.1}"
+  --alf.bias_adaptive_beta_max "${ALF_ADAPTIVE_BETA_MAX:-0.95}"
+  --alf.bias_adaptive_variance_reference "${ALF_ADAPTIVE_VARIANCE_REFERENCE:-2.5e-3}"
+  --alf.bias_adaptive_state_decay "${ALF_ADAPTIVE_STATE_DECAY:-0.9}"
+)
+
 if [[ "${RUN_ALF:-1}" == "1" ]]; then
   "${train_cmd[@]}" experiments/qwen3_moe_owt_104m_alf.py "${common_overrides[@]}"
 fi
@@ -79,6 +86,20 @@ if [[ "${RUN_EMA:-0}" == "1" ]]; then
   "${train_cmd[@]}" experiments/qwen3_moe_owt_104m_alf_ema.py \
     "${common_overrides[@]}" \
     --alf.bias_ema_beta "${ALF_EMA_BETA:-0.5}"
+fi
+
+if [[ "${RUN_ADAPTIVE_EMA_VARIANCE:-0}" == "1" ]]; then
+  "${train_cmd[@]}" experiments/qwen3_moe_owt_104m_alf_adaptive_ema_variance.py \
+    "${common_overrides[@]}" \
+    "${adaptive_ema_overrides[@]}" \
+    --alf.bias_update_rate "${ALF_ADAPTIVE_EMA_RATE:-1e-1}"
+fi
+
+if [[ "${RUN_ADAPTIVE_EMA_PERSISTENT_OSCILLATION:-0}" == "1" ]]; then
+  "${train_cmd[@]}" experiments/qwen3_moe_owt_104m_alf_adaptive_ema_persistent_oscillation.py \
+    "${common_overrides[@]}" \
+    "${adaptive_ema_overrides[@]}" \
+    --alf.bias_update_rate "${ALF_ADAPTIVE_EMA_RATE:-1e-1}"
 fi
 
 if [[ "${RUN_ACCUM:-0}" == "1" ]]; then

@@ -199,6 +199,46 @@ def test_alf_bias_updates_once_per_optimizer_step_with_accumulation(tmp_path: Pa
     assert train_record["train"]["bias_update_events"] == 2
 
 
+def test_adaptive_ema_policies_log_dynamic_router_state(tmp_path: Path) -> None:
+    """Both adaptive EMA policies should run and expose their dynamic beta state."""
+
+    for policy in [
+        "adaptive_ema_variance",
+        "adaptive_ema_persistent_oscillation",
+    ]:
+        output_dir = tmp_path / policy
+        train(
+            "experiments/qwen3_moe_tiny_alf.py",
+            [
+                "--training.max_steps",
+                "1",
+                "--training.output_dir",
+                str(output_dir),
+                "--training.save_every",
+                "1",
+                "--alf.bias_update_policy",
+                policy,
+                "--alf.bias_update_rate",
+                "0.1",
+                "--wandb.enabled",
+                "false",
+            ],
+        )
+
+        records = [
+            json.loads(line)
+            for line in (output_dir / "metrics.jsonl").read_text(encoding="utf-8").splitlines()
+        ]
+        train_record = next(record for record in records if "train" in record)
+        router_summaries = train_record["router"]["routers"].values()
+
+        for summary in router_summaries:
+            assert summary["bias_update_policy"] == policy
+            assert 0.1 <= summary["adaptive_ema_beta"] <= 0.95
+            assert summary["normalized_load_variance"] >= 0.0
+            assert summary["load_batch_noise"] > 0.0
+
+
 def test_alf_bias_max_update_step_freezes_training_updates(tmp_path: Path) -> None:
     """Training should stop reporting bias updates after the configured step."""
 

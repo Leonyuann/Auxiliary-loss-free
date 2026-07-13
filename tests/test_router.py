@@ -254,6 +254,10 @@ def test_control_buffers_stay_float32_after_bfloat16_cast() -> None:
     assert router.last_bias_delta.dtype == torch.float32
     assert router.load_error_ema.dtype == torch.float32
     assert router.load_error_accumulator.dtype == torch.float32
+    assert router.previous_load_error.dtype == torch.float32
+    assert router.persistent_energy_ema.dtype == torch.float32
+    assert router.oscillation_energy_ema.dtype == torch.float32
+    assert router.last_adaptive_ema_beta.dtype == torch.float32
 
     router.train()
     router(torch.ones(4, 2, dtype=torch.bfloat16))
@@ -286,6 +290,10 @@ def test_router_metric_summary_is_serializable() -> None:
     assert load_summary["max_min_load_ratio"] == 1.0
     assert router_summary["bias"]["values"] == [0.0, 0.0]
     assert router_summary["load"]["total_assignments"] == 2
+    assert abs(router_summary["adaptive_ema_beta"] - 0.95) < 1e-6
+    assert router_summary["excess_load_variance"] == 0.0
+    assert router_summary["persistent_energy_ema"] == 0.0
+    assert router_summary["oscillation_energy_ema"] == 0.0
 
 
 def test_ema_bias_update_policy_tracks_smoothed_error() -> None:
@@ -311,6 +319,105 @@ def test_ema_bias_update_policy_tracks_smoothed_error() -> None:
     assert router.update_expert_bias_from_accumulated_load() is True
     assert torch.allclose(router.load_error_ema, torch.tensor([0.25, -0.25]))
     assert torch.allclose(router.last_bias_delta, torch.tensor([0.25, -0.25]))
+
+
+def test_adaptive_ema_variance_uses_noise_corrected_load_variance() -> None:
+    """Variance-adaptive EMA should lower beta for excess load imbalance."""
+
+    router = Qwen3MoeAuxiliaryLossFreeTopKRouter(
+        hidden_size=2,
+        num_experts=2,
+        num_experts_per_tok=1,
+        norm_topk_prob=False,
+        expert_bias_update_rate=1.0,
+        expert_bias_update_policy="adaptive_ema_variance",
+        expert_bias_adaptive_beta_min=0.1,
+        expert_bias_adaptive_beta_max=0.9,
+        expert_bias_adaptive_variance_reference=0.25,
+    )
+    with torch.no_grad():
+        router.weight.zero_()
+        router.expert_bias.copy_(torch.tensor([0.0, 0.1]))
+
+    router.train()
+    router(torch.ones(4, 2))
+
+    assert router.update_expert_bias_from_accumulated_load() is True
+    assert torch.isclose(router.last_normalized_load_variance, torch.tensor(1.0))
+    assert torch.isclose(router.last_batch_noise, torch.tensor(0.25))
+    assert torch.isclose(router.last_excess_load_variance, torch.tensor(0.75))
+    assert torch.isclose(router.last_adaptive_ema_beta, torch.tensor(0.3))
+    assert torch.allclose(router.load_error_ema, torch.tensor([0.35, -0.35]))
+    assert torch.allclose(router.last_bias_delta, router.load_error_ema)
+
+
+def test_adaptive_ema_persistent_oscillation_raises_beta_on_reversal() -> None:
+    """Persistent/oscillation EMA should smooth a reversing load-error direction."""
+
+    router = Qwen3MoeAuxiliaryLossFreeTopKRouter(
+        hidden_size=2,
+        num_experts=2,
+        num_experts_per_tok=1,
+        norm_topk_prob=False,
+        expert_bias_update_rate=1.0,
+        expert_bias_update_policy="adaptive_ema_persistent_oscillation",
+        expert_bias_adaptive_beta_min=0.1,
+        expert_bias_adaptive_beta_max=0.9,
+        expert_bias_adaptive_state_decay=0.0,
+    )
+    with torch.no_grad():
+        router.weight.zero_()
+        router.expert_bias.copy_(torch.tensor([0.0, 0.1]))
+
+    router.train()
+    router(torch.ones(4, 2))
+    assert router.update_expert_bias_from_accumulated_load() is True
+    assert torch.isclose(router.last_adaptive_ema_beta, torch.tensor(0.2))
+    assert torch.allclose(router.load_error_ema, torch.tensor([0.4, -0.4]))
+
+    with torch.no_grad():
+        router.last_load_fraction.copy_(torch.tensor([1.0, 0.0]))
+    router._update_expert_bias()
+
+    assert torch.isclose(router.persistent_energy_ema, torch.tensor(0.0))
+    assert torch.isclose(router.oscillation_energy_ema, torch.tensor(1.0))
+    assert torch.isclose(router.last_adaptive_ema_beta, torch.tensor(0.9))
+    assert torch.allclose(router.load_error_ema, torch.tensor([0.31, -0.31]))
+
+
+def test_adaptive_ema_state_round_trips_through_router_state_dict() -> None:
+    """Adaptive beta history should survive model checkpoint save and restore."""
+
+    router = Qwen3MoeAuxiliaryLossFreeTopKRouter(
+        hidden_size=2,
+        num_experts=2,
+        num_experts_per_tok=1,
+        norm_topk_prob=False,
+        expert_bias_update_rate=1.0,
+        expert_bias_update_policy="adaptive_ema_persistent_oscillation",
+    )
+    with torch.no_grad():
+        router.weight.zero_()
+        router.expert_bias.copy_(torch.tensor([0.0, 0.1]))
+    router.train()
+    router(torch.ones(4, 2))
+    router.update_expert_bias_from_accumulated_load()
+
+    restored = Qwen3MoeAuxiliaryLossFreeTopKRouter(
+        hidden_size=2,
+        num_experts=2,
+        num_experts_per_tok=1,
+        norm_topk_prob=False,
+        expert_bias_update_rate=1.0,
+        expert_bias_update_policy="adaptive_ema_persistent_oscillation",
+    )
+    restored.load_state_dict(router.state_dict())
+
+    assert bool(restored.adaptive_state_initialized.item()) is True
+    assert torch.equal(restored.previous_load_error, router.previous_load_error)
+    assert torch.equal(restored.persistent_energy_ema, router.persistent_energy_ema)
+    assert torch.equal(restored.oscillation_energy_ema, router.oscillation_energy_ema)
+    assert torch.equal(restored.last_adaptive_ema_beta, router.last_adaptive_ema_beta)
 
 
 def test_accumulated_sign_updates_only_on_interval() -> None:
@@ -385,6 +492,31 @@ def test_invalid_linear_bias_update_schedule_raises() -> None:
             )
         except ValueError as error:
             assert "expert_bias_update_schedule_steps" in str(error)
+        else:
+            raise AssertionError("Expected ValueError")
+
+
+def test_invalid_adaptive_ema_parameters_raise() -> None:
+    """Adaptive EMA bounds, variance reference, and state decay must be valid."""
+
+    invalid_kwargs = [
+        {"expert_bias_adaptive_beta_min": -0.1},
+        {"expert_bias_adaptive_beta_min": 0.9, "expert_bias_adaptive_beta_max": 0.8},
+        {"expert_bias_adaptive_beta_max": 1.0},
+        {"expert_bias_adaptive_variance_reference": 0.0},
+        {"expert_bias_adaptive_state_decay": 1.0},
+    ]
+    for kwargs in invalid_kwargs:
+        try:
+            Qwen3MoeAuxiliaryLossFreeTopKRouter(
+                hidden_size=2,
+                num_experts=2,
+                num_experts_per_tok=1,
+                norm_topk_prob=False,
+                **kwargs,
+            )
+        except ValueError as error:
+            assert "adaptive" in str(error)
         else:
             raise AssertionError("Expected ValueError")
 

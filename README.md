@@ -190,6 +190,10 @@ Supported ALF bias update policies:
 - `proportional`: update bias by the proportional load error.
 - `sign`: update bias by fixed-size steps from the load error direction.
 - `ema`: update bias from an exponential moving average of load error.
+- `adaptive_ema_variance`: lower EMA beta as batch-noise-corrected load
+  variance increases.
+- `adaptive_ema_persistent_oscillation`: lower beta for persistent load error
+  and raise it for oscillating load error.
 - `accumulated_sign`: accumulate load error over an interval, then apply a sign step.
 - `balanced_topk_sign`: update the most imbalanced positive and negative experts.
 
@@ -199,6 +203,21 @@ Bias update rate scheduling defaults to `--alf.bias_update_schedule constant`. U
 optimizer steps. Set `--alf.bias_max_update_steps N` to allow updates through
 optimizer step `N` and freeze bias from step `N + 1`; the default `None` keeps
 updates enabled indefinitely.
+
+The PyTorch baseline scripts expose both adaptive EMA policies as opt-in runs:
+
+```bash
+RUN_ALF=0 RUN_AUX=0 RUN_ADAPTIVE_EMA_VARIANCE=1 \
+  bash scripts/run_owt_104m_baselines.sh
+
+RUN_ALF=0 RUN_EMA=0 RUN_ADAPTIVE_EMA_PERSISTENT_OSCILLATION=1 \
+  bash scripts/run_c4_300m_baselines.sh
+```
+
+Use `ALF_ADAPTIVE_BETA_MIN`, `ALF_ADAPTIVE_BETA_MAX`,
+`ALF_ADAPTIVE_VARIANCE_REFERENCE`, and `ALF_ADAPTIVE_STATE_DECAY` to override
+the shared adaptive defaults. These policies are currently implemented only in
+the Hugging Face/PyTorch training path, not the Megatron router adapter.
 
 Checkpoints include the experiment config in `alf_experiment_config.json`, so a copied
 checkpoint directory can still be inspected with `alf-inspect-router`.

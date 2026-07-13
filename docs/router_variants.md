@@ -30,6 +30,41 @@ bias_delta = update_rate * sign(target_fraction - observed_fraction)
 `bias_ema_beta`. `accumulated_sign` accumulates load error across
 `update_interval` forwards and then applies one signed update.
 
+`adaptive_ema_variance` computes a per-layer beta from the complete global
+optimizer-step expert counts. For expert fractions `p`, uniform target `u`, `E`
+experts, and `N` assignments:
+
+```text
+raw_variance = E * sum((u - p) ** 2)
+batch_noise = (E - 1) / N
+excess_variance = max(raw_variance - batch_noise, 0)
+magnitude = excess_variance / (excess_variance + variance_reference)
+beta = beta_max - (beta_max - beta_min) * magnitude
+```
+
+`adaptive_ema_persistent_oscillation` decomposes consecutive load errors into
+persistent and oscillating components:
+
+```text
+persistent = (error_t + error_t_minus_1) / 2
+oscillating = (error_t - error_t_minus_1) / 2
+persistent_energy = E * sum(persistent ** 2)
+oscillation_energy = E * sum(oscillating ** 2)
+beta = (smoothed_oscillation_energy + batch_noise) /
+       (smoothed_persistent_energy + smoothed_oscillation_energy + batch_noise)
+```
+
+The resulting beta is clipped to `bias_adaptive_beta_min` and
+`bias_adaptive_beta_max`, then used in the standard load-error EMA. The default
+variance reference is `2.5e-3`, energy-state decay is `0.9`, and beta bounds are
+`0.1` and `0.95`. All adaptive state is stored as router buffers, preserved by
+checkpoints, and kept in FP32 when model weights use BF16. Router metrics expose
+the dynamic beta, raw/excess normalized variance, finite-batch noise, and the two
+energy estimates for JSONL and W&B analysis.
+
+Both adaptive policies are currently specific to the Hugging Face/PyTorch path.
+Megatron configs continue to accept the existing fixed-beta `ema` policy only.
+
 `balanced_topk_sign` keeps the original signed ALF direction but updates only a
 balanced subset of experts. It chooses the `bias_update_topk` largest positive
 load errors and the same number of largest negative load errors, then applies:

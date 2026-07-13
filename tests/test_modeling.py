@@ -82,6 +82,10 @@ class FakeAlfConfig:
         bias_init: Initial expert-bias value.
         bias_update_rate: Bias update rate.
         bias_update_policy: Bias update policy.
+        bias_adaptive_beta_min: Minimum adaptive EMA beta.
+        bias_adaptive_beta_max: Maximum adaptive EMA beta.
+        bias_adaptive_variance_reference: Variance-adaptive mapping midpoint.
+        bias_adaptive_state_decay: Persistent/oscillation energy decay.
         update_interval: Number of forwards between bias updates.
         bias_update_topk: Number of positive-error and negative-error experts
             updated by balanced top-k sign.
@@ -95,6 +99,10 @@ class FakeAlfConfig:
     bias_init: float = 0.125
     bias_update_rate: float = 0.05
     bias_update_policy: str = "sign"
+    bias_adaptive_beta_min: float = 0.2
+    bias_adaptive_beta_max: float = 0.8
+    bias_adaptive_variance_reference: float = 0.01
+    bias_adaptive_state_decay: float = 0.7
     update_interval: int = 4
     bias_update_topk: int = 2
     bias_clip: float | None = 0.75
@@ -118,6 +126,10 @@ def test_replace_qwen3_moe_routers_copies_router_weights_and_disables_aux_loss()
         expert_bias_init=0.25,
         expert_bias_update_rate=0.1,
         expert_bias_update_interval=2,
+        expert_bias_adaptive_beta_min=0.15,
+        expert_bias_adaptive_beta_max=0.85,
+        expert_bias_adaptive_variance_reference=0.02,
+        expert_bias_adaptive_state_decay=0.6,
         expert_bias_clip=0.5,
         expert_bias_warmup_steps=3,
         expert_bias_max_update_steps=6,
@@ -139,6 +151,10 @@ def test_replace_qwen3_moe_routers_copies_router_weights_and_disables_aux_loss()
         assert torch.allclose(router.expert_bias, torch.full((3,), 0.25))
         assert router.expert_bias_update_rate == 0.1
         assert router.expert_bias_update_interval == 2
+        assert router.expert_bias_adaptive_beta_min == 0.15
+        assert router.expert_bias_adaptive_beta_max == 0.85
+        assert router.expert_bias_adaptive_variance_reference == 0.02
+        assert router.expert_bias_adaptive_state_decay == 0.6
         assert router.expert_bias_clip == 0.5
         assert router.expert_bias_warmup_steps == 3
         assert router.expert_bias_max_update_steps == 6
@@ -165,6 +181,10 @@ def test_apply_aux_loss_free_router_reads_alf_config_object() -> None:
         assert router.expert_bias_update_rate == 0.05
         assert router.expert_bias_update_policy == "sign"
         assert router.expert_bias_update_interval == 4
+        assert router.expert_bias_adaptive_beta_min == 0.2
+        assert router.expert_bias_adaptive_beta_max == 0.8
+        assert router.expert_bias_adaptive_variance_reference == 0.01
+        assert router.expert_bias_adaptive_state_decay == 0.7
         assert router.expert_bias_update_topk == 2
         assert router.expert_bias_clip == 0.75
         assert router.expert_bias_warmup_steps == 2

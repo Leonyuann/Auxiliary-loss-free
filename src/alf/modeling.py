@@ -205,6 +205,10 @@ def replace_qwen3_moe_routers(
     expert_bias_update_policy: str = "proportional",
     expert_bias_update_interval: int = 1,
     expert_bias_ema_beta: float = 0.9,
+    expert_bias_adaptive_beta_min: float = 0.1,
+    expert_bias_adaptive_beta_max: float = 0.95,
+    expert_bias_adaptive_variance_reference: float = 2.5e-3,
+    expert_bias_adaptive_state_decay: float = 0.9,
     expert_bias_update_topk: int = 1,
     expert_bias_update_schedule: str = "constant",
     expert_bias_update_schedule_steps: int | None = None,
@@ -224,6 +228,12 @@ def replace_qwen3_moe_routers(
         expert_bias_update_policy: Bias update policy.
         expert_bias_update_interval: Number of optimizer steps between updates.
         expert_bias_ema_beta: EMA coefficient for the ``ema`` bias update policy.
+        expert_bias_adaptive_beta_min: Minimum adaptive EMA beta.
+        expert_bias_adaptive_beta_max: Maximum adaptive EMA beta.
+        expert_bias_adaptive_variance_reference: Excess normalized load variance
+            at the midpoint of the variance-adaptive beta mapping.
+        expert_bias_adaptive_state_decay: Decay for persistent and oscillation
+            energy estimates.
         expert_bias_update_topk: Number of positive-error and negative-error experts
             updated by the ``balanced_topk_sign`` policy.
         expert_bias_update_schedule: Schedule used for bias update rates.
@@ -264,6 +274,10 @@ def replace_qwen3_moe_routers(
             expert_bias_update_policy=expert_bias_update_policy,
             expert_bias_update_interval=expert_bias_update_interval,
             expert_bias_ema_beta=expert_bias_ema_beta,
+            expert_bias_adaptive_beta_min=expert_bias_adaptive_beta_min,
+            expert_bias_adaptive_beta_max=expert_bias_adaptive_beta_max,
+            expert_bias_adaptive_variance_reference=expert_bias_adaptive_variance_reference,
+            expert_bias_adaptive_state_decay=expert_bias_adaptive_state_decay,
             expert_bias_update_topk=expert_bias_update_topk,
             expert_bias_update_schedule=expert_bias_update_schedule,
             expert_bias_update_schedule_steps=expert_bias_update_schedule_steps,
@@ -311,8 +325,9 @@ def apply_aux_loss_free_router(model: nn.Module, alf_config: Any | None = None) 
         alf_config: Mapping, dataclass, or object exposing ALF fields. Supported
             fields are `enabled`, `bias_init`, `bias_update_rate`,
             `bias_update_topk`, `bias_update_schedule`, `bias_update_schedule_steps`,
-            `bias_update_end_rate`, `update_interval`, `bias_clip`, `warmup_steps`,
-            `bias_max_update_steps`, and `disable_router_aux_loss`.
+            `bias_update_end_rate`, adaptive-beta settings, `update_interval`,
+            `bias_clip`, `warmup_steps`, `bias_max_update_steps`, and
+            `disable_router_aux_loss`.
 
     Returns:
         A serializable summary with both replacement and patching aliases.
@@ -326,6 +341,12 @@ def apply_aux_loss_free_router(model: nn.Module, alf_config: Any | None = None) 
         expert_bias_update_policy=str(_config_value(alf_config, "bias_update_policy", "proportional")),
         expert_bias_update_interval=int(_config_value(alf_config, "update_interval", 1)),
         expert_bias_ema_beta=float(_config_value(alf_config, "bias_ema_beta", 0.9)),
+        expert_bias_adaptive_beta_min=float(_config_value(alf_config, "bias_adaptive_beta_min", 0.1)),
+        expert_bias_adaptive_beta_max=float(_config_value(alf_config, "bias_adaptive_beta_max", 0.95)),
+        expert_bias_adaptive_variance_reference=float(
+            _config_value(alf_config, "bias_adaptive_variance_reference", 2.5e-3)
+        ),
+        expert_bias_adaptive_state_decay=float(_config_value(alf_config, "bias_adaptive_state_decay", 0.9)),
         expert_bias_update_topk=int(_config_value(alf_config, "bias_update_topk", 1)),
         expert_bias_update_schedule=str(_config_value(alf_config, "bias_update_schedule", "constant")),
         expert_bias_update_schedule_steps=_config_value(alf_config, "bias_update_schedule_steps", None),

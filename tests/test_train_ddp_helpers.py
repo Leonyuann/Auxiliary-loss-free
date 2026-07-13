@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from alf.config import AlfConfig, ExperimentConfig, TrainingConfig, load_experiment_config
@@ -69,6 +71,8 @@ def test_c4_configs_disable_gradient_checkpointing_for_fair_comparison() -> None
     for path in [
         "experiments/qwen3_moe_c4_300m_alf.py",
         "experiments/qwen3_moe_c4_300m_alf_ema.py",
+        "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_variance.py",
+        "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_persistent_oscillation.py",
         "experiments/qwen3_moe_c4_300m_aux_loss.py",
     ]:
         config = load_experiment_config(path)
@@ -81,6 +85,8 @@ def test_c4_300m_configs_use_reasonable_moe_scale() -> None:
     for path in [
         "experiments/qwen3_moe_c4_300m_alf.py",
         "experiments/qwen3_moe_c4_300m_alf_ema.py",
+        "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_variance.py",
+        "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_persistent_oscillation.py",
         "experiments/qwen3_moe_c4_300m_aux_loss.py",
     ]:
         config = load_experiment_config(path)
@@ -130,6 +136,62 @@ def test_c4_alf_bias_update_cadence_is_stable_for_accumulation() -> None:
     assert ema_config.alf.warmup_steps == 0
     assert ema_config.alf.bias_max_update_steps is None
     assert ema_config.alf.bias_clip == 2.0
+
+
+def test_adaptive_ema_experiment_configs_match_scale_defaults() -> None:
+    """104M and 300M adaptive EMA configs should preserve their scale baselines."""
+
+    paths_and_rates = {
+        "experiments/qwen3_moe_owt_104m_alf_adaptive_ema_variance.py": (
+            "adaptive_ema_variance",
+            1e-1,
+            10_000,
+        ),
+        "experiments/qwen3_moe_owt_104m_alf_adaptive_ema_persistent_oscillation.py": (
+            "adaptive_ema_persistent_oscillation",
+            1e-1,
+            10_000,
+        ),
+        "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_variance.py": (
+            "adaptive_ema_variance",
+            5e-2,
+            20_000,
+        ),
+        "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_persistent_oscillation.py": (
+            "adaptive_ema_persistent_oscillation",
+            5e-2,
+            20_000,
+        ),
+    }
+
+    for path, (policy, update_rate, max_steps) in paths_and_rates.items():
+        config = load_experiment_config(path)
+        assert config.alf.bias_update_policy == policy
+        assert config.alf.bias_update_rate == update_rate
+        assert config.alf.bias_adaptive_beta_min == 0.1
+        assert config.alf.bias_adaptive_beta_max == 0.95
+        assert config.alf.bias_adaptive_variance_reference == 2.5e-3
+        assert config.alf.bias_adaptive_state_decay == 0.9
+        assert config.training.max_steps == max_steps
+
+
+def test_adaptive_ema_experiments_are_exposed_by_baseline_scripts() -> None:
+    """Both PyTorch baseline scripts should expose opt-in adaptive EMA runs."""
+
+    project_root = Path(__file__).resolve().parents[1]
+    scripts = {
+        "scripts/run_owt_104m_baselines.sh": "qwen3_moe_owt_104m",
+        "scripts/run_c4_300m_baselines.sh": "qwen3_moe_c4_300m",
+    }
+
+    for relative_path, experiment_prefix in scripts.items():
+        content = (project_root / relative_path).read_text(encoding="utf-8")
+        assert "RUN_ADAPTIVE_EMA_VARIANCE" in content
+        assert "RUN_ADAPTIVE_EMA_PERSISTENT_OSCILLATION" in content
+        assert f"{experiment_prefix}_alf_adaptive_ema_variance.py" in content
+        assert f"{experiment_prefix}_alf_adaptive_ema_persistent_oscillation.py" in content
+        assert "bias_adaptive_beta_min" in content
+        assert "bias_adaptive_variance_reference" in content
 
 
 def test_clip_or_measure_gradient_norm_clips_when_configured() -> None:

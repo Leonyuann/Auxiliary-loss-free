@@ -31,6 +31,14 @@ def test_apply_dotted_overrides() -> None:
             "--alf.bias_update_end_rate=1e-5",
             "--alf.bias_max_update_steps",
             "7",
+            "--alf.bias_adaptive_beta_min",
+            "0.2",
+            "--alf.bias_adaptive_beta_max",
+            "0.8",
+            "--alf.bias_adaptive_variance_reference",
+            "0.01",
+            "--alf.bias_adaptive_state_decay",
+            "0.7",
             "--data.train_files=tests/fixtures/tiny_corpus.txt",
             "--training.num_workers",
             "2",
@@ -61,6 +69,10 @@ def test_apply_dotted_overrides() -> None:
     assert config.alf.bias_update_schedule_steps == 10
     assert config.alf.bias_update_end_rate == 1e-5
     assert config.alf.bias_max_update_steps == 7
+    assert config.alf.bias_adaptive_beta_min == 0.2
+    assert config.alf.bias_adaptive_beta_max == 0.8
+    assert config.alf.bias_adaptive_variance_reference == 0.01
+    assert config.alf.bias_adaptive_state_decay == 0.7
     assert config.data.train_files == ["tests/fixtures/tiny_corpus.txt"]
     assert config.training.num_workers == 2
     assert config.training.pin_memory is True

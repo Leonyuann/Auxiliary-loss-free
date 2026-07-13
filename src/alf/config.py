@@ -136,9 +136,16 @@ class AlfConfig:
         enabled: Whether to replace routers with auxiliary-loss-free routers.
         bias_update_rate: Magnitude of each load-balancing bias update.
         bias_update_policy: Bias update policy name. Supported values are
-            ``proportional``, ``sign``, ``ema``, ``accumulated_sign``, and
+            ``proportional``, ``sign``, ``ema``, ``adaptive_ema_variance``,
+            ``adaptive_ema_persistent_oscillation``, ``accumulated_sign``, and
             ``balanced_topk_sign``.
         bias_ema_beta: EMA coefficient used by the ``ema`` policy.
+        bias_adaptive_beta_min: Minimum beta used by adaptive EMA policies.
+        bias_adaptive_beta_max: Maximum beta used by adaptive EMA policies.
+        bias_adaptive_variance_reference: Excess normalized load variance that
+            sets the midpoint of the variance-adaptive beta mapping.
+        bias_adaptive_state_decay: EMA decay used for persistent and oscillation
+            energy estimates.
         bias_update_topk: Number of positive-error and negative-error experts
             updated by the ``balanced_topk_sign`` policy.
         bias_update_schedule: Schedule for the bias update rate. Supported values are
@@ -159,6 +166,10 @@ class AlfConfig:
     bias_update_rate: float = 1e-3
     bias_update_policy: str = "proportional"
     bias_ema_beta: float = 0.9
+    bias_adaptive_beta_min: float = 0.1
+    bias_adaptive_beta_max: float = 0.95
+    bias_adaptive_variance_reference: float = 2.5e-3
+    bias_adaptive_state_decay: float = 0.9
     bias_update_topk: int = 1
     bias_update_schedule: str = "constant"
     bias_update_schedule_steps: int | None = None

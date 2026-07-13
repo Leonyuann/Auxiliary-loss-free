@@ -517,6 +517,26 @@ def summarize_auxiliary_loss_free_router(
         "top_k": int(router.top_k),
         "bias_update_policy": router.expert_bias_update_policy,
         "bias_ema_beta": float(getattr(router, "expert_bias_ema_beta", 0.9)),
+        "adaptive_beta_min": float(getattr(router, "expert_bias_adaptive_beta_min", 0.1)),
+        "adaptive_beta_max": float(getattr(router, "expert_bias_adaptive_beta_max", 0.95)),
+        "adaptive_variance_reference": float(
+            getattr(router, "expert_bias_adaptive_variance_reference", 2.5e-3)
+        ),
+        "adaptive_state_decay": float(getattr(router, "expert_bias_adaptive_state_decay", 0.9)),
+        "adaptive_ema_beta": float(getattr(router, "last_adaptive_ema_beta", torch.tensor(0.0)).item()),
+        "normalized_load_variance": float(
+            getattr(router, "last_normalized_load_variance", torch.tensor(0.0)).item()
+        ),
+        "excess_load_variance": float(
+            getattr(router, "last_excess_load_variance", torch.tensor(0.0)).item()
+        ),
+        "load_batch_noise": float(getattr(router, "last_batch_noise", torch.tensor(0.0)).item()),
+        "persistent_energy_ema": float(
+            getattr(router, "persistent_energy_ema", torch.tensor(0.0)).item()
+        ),
+        "oscillation_energy_ema": float(
+            getattr(router, "oscillation_energy_ema", torch.tensor(0.0)).item()
+        ),
         "bias_update_topk": int(getattr(router, "expert_bias_update_topk", 1)),
         "bias_update_schedule": getattr(router, "expert_bias_update_schedule", "constant"),
         "bias_update_schedule_steps": getattr(router, "expert_bias_update_schedule_steps", None),
