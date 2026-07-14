@@ -260,6 +260,8 @@ def test_control_buffers_stay_float32_after_bfloat16_cast() -> None:
     assert router.persistent_energy_ema.dtype == torch.float32
     assert router.oscillation_energy_ema.dtype == torch.float32
     assert router.last_adaptive_ema_beta.dtype == torch.float32
+    assert router.load_error_second_moment.dtype == torch.float32
+    assert router.last_effective_update_rate.dtype == torch.float32
 
     router.train()
     router(torch.ones(4, 2, dtype=torch.bfloat16))
@@ -300,6 +302,8 @@ def test_router_metric_summary_is_serializable() -> None:
     assert router_summary["excess_load_variance"] == 0.0
     assert router_summary["persistent_energy_ema"] == 0.0
     assert router_summary["oscillation_energy_ema"] == 0.0
+    assert router_summary["load_error_second_moment"]["values"] == [0.0, 0.0]
+    assert router_summary["effective_update_rate"]["values"] == [0.0, 0.0]
 
 
 def test_ema_bias_update_policy_tracks_smoothed_error() -> None:
@@ -325,6 +329,116 @@ def test_ema_bias_update_policy_tracks_smoothed_error() -> None:
     assert router.update_expert_bias_from_accumulated_load() is True
     assert torch.allclose(router.load_error_ema, torch.tensor([0.25, -0.25]))
     assert torch.allclose(router.last_bias_delta, torch.tensor([0.25, -0.25]))
+
+
+def test_adaptive_per_expert_updates_moment_before_effective_rate() -> None:
+    """Per-expert updates should use the current error in this step's denominator."""
+
+    router = Qwen3MoeAuxiliaryLossFreeTopKRouter(
+        hidden_size=2,
+        num_experts=4,
+        num_experts_per_tok=1,
+        norm_topk_prob=False,
+        expert_bias_update_rate=0.1,
+        expert_bias_update_policy="adaptive_per_expert",
+        expert_bias_adaptive_per_expert_beta=0.5,
+        expert_bias_adaptive_per_expert_epsilon=0.25,
+    )
+    load_error = torch.tensor([0.25, 0.125, -0.125, -0.25])
+    with torch.no_grad():
+        router.last_load_fraction.copy_(0.25 - load_error)
+
+    router._update_expert_bias()
+
+    expected_second_moment = 0.5 * load_error.square()
+    expected_effective_rate = 0.1 / torch.sqrt(expected_second_moment + 0.25)
+    assert torch.allclose(router.load_error_second_moment, expected_second_moment)
+    assert torch.allclose(router.last_effective_update_rate, expected_effective_rate)
+    assert torch.allclose(router.last_bias_delta, expected_effective_rate * load_error)
+    assert router.last_bias_update_rate.item() == pytest.approx(0.1)
+
+
+def test_adaptive_per_expert_uses_global_ddp_optimizer_step_load(monkeypatch) -> None:
+    """Per-expert state should consume globally reduced counts accumulated for the step."""
+
+    class FakeDist:
+        """Distributed test double that adds complementary remote expert counts."""
+
+        class ReduceOp:
+            """Reduction operation names used by the router."""
+
+            SUM = "sum"
+
+        def is_available(self) -> bool:
+            """Report that distributed collectives are available."""
+
+            return True
+
+        def is_initialized(self) -> bool:
+            """Report that the fake process group is initialized."""
+
+            return True
+
+        def all_reduce(self, tensor: torch.Tensor, op: str) -> None:
+            """Add a remote rank's complementary load to the local counts."""
+
+            assert op == self.ReduceOp.SUM
+            tensor.add_(torch.tensor([2, 0], device=tensor.device))
+
+    monkeypatch.setattr("alf.router.dist", FakeDist())
+    router = Qwen3MoeAuxiliaryLossFreeTopKRouter(
+        hidden_size=2,
+        num_experts=2,
+        num_experts_per_tok=1,
+        norm_topk_prob=False,
+        expert_bias_update_rate=0.1,
+        expert_bias_update_policy="adaptive_per_expert",
+    )
+    with torch.no_grad():
+        router.weight.zero_()
+        router.expert_bias.copy_(torch.tensor([0.0, 0.1]))
+
+    router.train()
+    router(torch.ones(2, 2))
+    router(torch.ones(2, 2))
+    assert router.accumulated_expert_load.tolist() == [4, 4]
+    assert router.update_expert_bias_from_accumulated_load() is True
+
+    assert router.last_expert_load.tolist() == [4, 4]
+    assert torch.equal(router.load_error_second_moment, torch.zeros(2))
+    assert torch.equal(router.last_bias_delta, torch.zeros(2))
+    assert int(router.bias_update_steps.item()) == 1
+
+
+def test_adaptive_per_expert_state_round_trips_and_stays_float32() -> None:
+    """Per-expert second moments and rates should checkpoint in FP32 under BF16."""
+
+    router = Qwen3MoeAuxiliaryLossFreeTopKRouter(
+        hidden_size=2,
+        num_experts=2,
+        num_experts_per_tok=1,
+        norm_topk_prob=False,
+        expert_bias_update_rate=0.1,
+        expert_bias_update_policy="adaptive_per_expert",
+    ).to(dtype=torch.bfloat16)
+    with torch.no_grad():
+        router.last_load_fraction.copy_(torch.tensor([0.25, 0.75]))
+    router._update_expert_bias()
+
+    restored = Qwen3MoeAuxiliaryLossFreeTopKRouter(
+        hidden_size=2,
+        num_experts=2,
+        num_experts_per_tok=1,
+        norm_topk_prob=False,
+        expert_bias_update_rate=0.1,
+        expert_bias_update_policy="adaptive_per_expert",
+    ).to(dtype=torch.bfloat16)
+    restored.load_state_dict(router.state_dict())
+
+    assert restored.load_error_second_moment.dtype == torch.float32
+    assert restored.last_effective_update_rate.dtype == torch.float32
+    assert torch.equal(restored.load_error_second_moment, router.load_error_second_moment)
+    assert torch.equal(restored.last_effective_update_rate, router.last_effective_update_rate)
 
 
 def test_adaptive_ema_variance_uses_noise_corrected_load_variance() -> None:
@@ -665,6 +779,41 @@ def test_invalid_gain_coupled_parameters_raise() -> None:
             assert "gain" in str(error)
         else:
             raise AssertionError("Expected ValueError")
+
+
+def test_invalid_adaptive_per_expert_parameters_raise() -> None:
+    """Per-expert second-moment beta and epsilon must be finite and valid."""
+
+    invalid_kwargs = [
+        {"expert_bias_adaptive_per_expert_beta": -0.1},
+        {"expert_bias_adaptive_per_expert_beta": 1.0},
+        {"expert_bias_adaptive_per_expert_beta": float("nan")},
+        {"expert_bias_adaptive_per_expert_epsilon": 0.0},
+        {"expert_bias_adaptive_per_expert_epsilon": float("inf")},
+    ]
+    for kwargs in invalid_kwargs:
+        with pytest.raises(ValueError, match="adaptive_per_expert"):
+            Qwen3MoeAuxiliaryLossFreeTopKRouter(
+                hidden_size=2,
+                num_experts=2,
+                num_experts_per_tok=1,
+                norm_topk_prob=False,
+                **kwargs,
+            )
+
+
+def test_invalid_bias_update_base_rate_raises() -> None:
+    """Adaptive updates require a finite non-negative scalar base rate."""
+
+    for update_rate in (-0.1, float("nan"), float("inf")):
+        with pytest.raises(ValueError, match="expert_bias_update_rate"):
+            Qwen3MoeAuxiliaryLossFreeTopKRouter(
+                hidden_size=2,
+                num_experts=2,
+                num_experts_per_tok=1,
+                norm_topk_prob=False,
+                expert_bias_update_rate=update_rate,
+            )
 
 
 def test_invalid_ema_beta_raises() -> None:

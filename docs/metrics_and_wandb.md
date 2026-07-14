@@ -55,6 +55,12 @@ records its configured `gain_coupled_normalized_gain`, `gain_coupled_rate_min`, 
 `gain_coupled_rate_max`. Compare `normalized_feedback_gain` with the target to see
 when rate clipping is active.
 
+For `adaptive_per_expert`, `last_bias_update_rate` remains the scheduled scalar base
+rate. `load_error_second_moment` and `effective_update_rate` each expose per-expert
+values plus mean/std/min/max summaries. The latter is the actual coefficient applied
+to each expert's load error after denominator scaling, so inspect its max and spread
+when diagnosing an aggressive controller.
+
 ## Local JSONL
 
 Every run also writes `metrics.jsonl` under the experiment output directory. This

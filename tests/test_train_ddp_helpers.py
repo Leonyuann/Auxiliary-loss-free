@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -71,6 +72,7 @@ def test_c4_configs_disable_gradient_checkpointing_for_fair_comparison() -> None
     for path in [
         "experiments/qwen3_moe_c4_300m_alf.py",
         "experiments/qwen3_moe_c4_300m_alf_ema.py",
+        "experiments/qwen3_moe_c4_300m_alf_adaptive_per_expert.py",
         "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_variance.py",
         "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_persistent_oscillation.py",
         "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_gain_coupled.py",
@@ -86,6 +88,7 @@ def test_c4_300m_configs_use_reasonable_moe_scale() -> None:
     for path in [
         "experiments/qwen3_moe_c4_300m_alf.py",
         "experiments/qwen3_moe_c4_300m_alf_ema.py",
+        "experiments/qwen3_moe_c4_300m_alf_adaptive_per_expert.py",
         "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_variance.py",
         "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_persistent_oscillation.py",
         "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_gain_coupled.py",
@@ -198,6 +201,32 @@ def test_adaptive_ema_experiment_configs_match_scale_defaults() -> None:
         assert config.training.seed == 42
 
 
+def test_adaptive_per_expert_configs_match_scale_baselines() -> None:
+    """Per-expert runs should change only controller settings at each model scale."""
+
+    paths = {
+        "experiments/qwen3_moe_owt_104m_alf_adaptive_per_expert.py": (
+            "experiments/qwen3_moe_owt_104m_alf.py",
+            1e-3,
+        ),
+        "experiments/qwen3_moe_c4_300m_alf_adaptive_per_expert.py": (
+            "experiments/qwen3_moe_c4_300m_alf.py",
+            5e-4,
+        ),
+    }
+    for path, (baseline_path, base_rate) in paths.items():
+        config = load_experiment_config(path)
+        baseline = load_experiment_config(baseline_path)
+        assert config.alf.bias_update_policy == "adaptive_per_expert"
+        assert config.alf.bias_update_rate == base_rate
+        assert config.alf.bias_adaptive_per_expert_beta == 0.9
+        assert config.alf.bias_adaptive_per_expert_epsilon == 1e-8
+        assert config.model == baseline.model
+        assert config.data == baseline.data
+        assert config.eval == baseline.eval
+        assert replace(config.training, output_dir=baseline.training.output_dir) == baseline.training
+
+
 def test_adaptive_ema_experiments_are_exposed_by_baseline_scripts() -> None:
     """Both PyTorch baseline scripts should expose opt-in adaptive EMA runs."""
 
@@ -218,6 +247,23 @@ def test_adaptive_ema_experiments_are_exposed_by_baseline_scripts() -> None:
         assert "bias_adaptive_beta_min" in content
         assert "bias_adaptive_variance_reference" in content
         assert "bias_gain_coupled_normalized_gain" in content
+
+
+def test_adaptive_per_expert_experiments_are_exposed_by_baseline_scripts() -> None:
+    """Both PyTorch launchers should expose the same opt-in controller knobs."""
+
+    project_root = Path(__file__).resolve().parents[1]
+    scripts = {
+        "scripts/run_owt_104m_baselines.sh": "qwen3_moe_owt_104m",
+        "scripts/run_c4_300m_baselines.sh": "qwen3_moe_c4_300m",
+    }
+    for relative_path, experiment_prefix in scripts.items():
+        content = (project_root / relative_path).read_text(encoding="utf-8")
+        assert "RUN_ADAPTIVE_PER_EXPERT" in content
+        assert "ALF_ADAPTIVE_PER_EXPERT_BASE_RATE" in content
+        assert "ALF_ADAPTIVE_PER_EXPERT_BETA" in content
+        assert "ALF_ADAPTIVE_PER_EXPERT_EPSILON" in content
+        assert f"{experiment_prefix}_alf_adaptive_per_expert.py" in content
 
 
 def test_owt_baseline_script_supports_multi_gpu_token_budget() -> None:
@@ -314,4 +360,3 @@ def test_fp32_adamw_loads_legacy_low_precision_state_as_float32() -> None:
     assert state["master_param"].dtype == torch.float32
     assert state["exp_avg"].dtype == torch.float32
     assert state["exp_avg_sq"].dtype == torch.float32
-

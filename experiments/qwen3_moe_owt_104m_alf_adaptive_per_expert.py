@@ -1,9 +1,9 @@
-"""104M-parameter Qwen3 MoE OWT ALF EMA bias-update experiment."""
+"""104M Qwen3 MoE OWT per-expert adaptive bias-rate experiment."""
 
 from alf.config import AlfConfig, DataConfig, EvalConfig, ExperimentConfig, ModelConfig, TrainingConfig, WandbConfig
 
 config = ExperimentConfig(
-    name="qwen3_moe_owt_104m_alf_ema",
+    name="qwen3_moe_owt_104m_alf_adaptive_per_expert",
     model=ModelConfig(
         use_tiny_config=True,
         tokenizer_name_or_path="/vepfs-mlp2/ylq/tokenizers/owt_bpe_32k",
@@ -26,7 +26,7 @@ config = ExperimentConfig(
     ),
     eval=EvalConfig(eval_every=500, eval_batch_size=16, max_eval_samples=2048),
     training=TrainingConfig(
-        output_dir="outputs/qwen3_moe_owt_104m_alf_ema",
+        output_dir="outputs/qwen3_moe_owt_104m_alf_adaptive_per_expert",
         seed=42,
         max_steps=10_000,
         batch_size=128,
@@ -41,9 +41,10 @@ config = ExperimentConfig(
     ),
     alf=AlfConfig(
         enabled=True,
-        bias_update_rate=1e-1,
-        bias_update_policy="ema",
-        bias_ema_beta=0.5,
+        bias_update_rate=1e-3,
+        bias_update_policy="adaptive_per_expert",
+        bias_adaptive_per_expert_beta=0.9,
+        bias_adaptive_per_expert_epsilon=1e-8,
         bias_init=0.0,
         bias_clip=None,
         update_interval=1,
@@ -53,6 +54,15 @@ config = ExperimentConfig(
         enabled=True,
         entity="liangqingyuann-huazhong-university-of-science-and-technology",
         project="Load-balance",
-        tags=["alf", "alf-ema", "qwen3-moe", "owt", "104m", "4h", "bpe32k"],
+        group="owt-104m",
+        tags=[
+            "alf",
+            "adaptive-per-expert",
+            "qwen3-moe",
+            "owt",
+            "104m",
+            "bpe32k",
+            "ddp",
+        ],
     ),
 )

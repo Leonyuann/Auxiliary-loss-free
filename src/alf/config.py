@@ -138,7 +138,8 @@ class AlfConfig:
         bias_update_policy: Bias update policy name. Supported values are
             ``proportional``, ``sign``, ``ema``, ``adaptive_ema_variance``,
             ``adaptive_ema_persistent_oscillation``,
-            ``adaptive_ema_gain_coupled``, ``accumulated_sign``, and
+            ``adaptive_ema_gain_coupled``, ``adaptive_per_expert``,
+            ``accumulated_sign``, and
             ``balanced_topk_sign``.
         bias_ema_beta: EMA coefficient used by the ``ema`` policy.
         bias_adaptive_beta_min: Minimum beta used by adaptive EMA policies.
@@ -151,6 +152,9 @@ class AlfConfig:
             used by the gain-coupled adaptive EMA policy.
         bias_gain_coupled_rate_min: Minimum dynamic bias update rate.
         bias_gain_coupled_rate_max: Maximum dynamic bias update rate.
+        bias_adaptive_per_expert_beta: EMA decay for per-expert squared load error.
+        bias_adaptive_per_expert_epsilon: Positive denominator stabilizer for
+            per-expert adaptive update rates.
         bias_update_topk: Number of positive-error and negative-error experts
             updated by the ``balanced_topk_sign`` policy.
         bias_update_schedule: Schedule for the bias update rate. Supported values are
@@ -178,6 +182,8 @@ class AlfConfig:
     bias_gain_coupled_normalized_gain: float = 1.0 / 30.0
     bias_gain_coupled_rate_min: float = 0.05
     bias_gain_coupled_rate_max: float = 0.3
+    bias_adaptive_per_expert_beta: float = 0.9
+    bias_adaptive_per_expert_epsilon: float = 1e-8
     bias_update_topk: int = 1
     bias_update_schedule: str = "constant"
     bias_update_schedule_steps: int | None = None

@@ -39,6 +39,10 @@ def test_apply_dotted_overrides() -> None:
             "0.01",
             "--alf.bias_adaptive_state_decay",
             "0.7",
+            "--alf.bias_adaptive_per_expert_beta",
+            "0.6",
+            "--alf.bias_adaptive_per_expert_epsilon",
+            "1e-6",
             "--data.train_files=tests/fixtures/tiny_corpus.txt",
             "--training.num_workers",
             "2",
@@ -73,6 +77,8 @@ def test_apply_dotted_overrides() -> None:
     assert config.alf.bias_adaptive_beta_max == 0.8
     assert config.alf.bias_adaptive_variance_reference == 0.01
     assert config.alf.bias_adaptive_state_decay == 0.7
+    assert config.alf.bias_adaptive_per_expert_beta == 0.6
+    assert config.alf.bias_adaptive_per_expert_epsilon == 1e-6
     assert config.data.train_files == ["tests/fixtures/tiny_corpus.txt"]
     assert config.training.num_workers == 2
     assert config.training.pin_memory is True

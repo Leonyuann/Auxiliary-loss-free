@@ -108,6 +108,14 @@ if [[ "${RUN_EMA:-0}" == "1" ]]; then
     --alf.bias_update_rate "${ALF_EMA_RATE:-1e-1}"
 fi
 
+if [[ "${RUN_ADAPTIVE_PER_EXPERT:-0}" == "1" ]]; then
+  "${train_cmd[@]}" "${torchrun_args[@]}" experiments/qwen3_moe_owt_104m_alf_adaptive_per_expert.py \
+    "${common_overrides[@]}" \
+    --alf.bias_update_rate "${ALF_ADAPTIVE_PER_EXPERT_BASE_RATE:-1e-3}" \
+    --alf.bias_adaptive_per_expert_beta "${ALF_ADAPTIVE_PER_EXPERT_BETA:-0.9}" \
+    --alf.bias_adaptive_per_expert_epsilon "${ALF_ADAPTIVE_PER_EXPERT_EPSILON:-1e-8}"
+fi
+
 if [[ "${RUN_ADAPTIVE_EMA_VARIANCE:-0}" == "1" ]]; then
   "${train_cmd[@]}" "${torchrun_args[@]}" experiments/qwen3_moe_owt_104m_alf_adaptive_ema_variance.py \
     "${common_overrides[@]}" \

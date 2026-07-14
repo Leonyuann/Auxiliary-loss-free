@@ -125,8 +125,8 @@ The main dataclass groups are:
   gradient checkpointing, and DDP options.
 - `AlfConfig`: whether auxiliary-loss-free routing is enabled, bias initialization,
   bias update rate, fixed/adaptive EMA settings, bias update policy, bias update
-  rate schedule, optional maximum bias update step, and whether to disable the
-  original router auxiliary loss.
+  rate schedule, per-expert second-moment beta and epsilon, optional maximum bias
+  update step, and whether to disable the original router auxiliary loss.
 - `EvalConfig`: validation interval, validation batch size, and sample cap.
 - `WandbConfig`: W&B online/offline/disabled mode, entity/project, group, tags, and
   checkpoint artifact logging.

@@ -528,6 +528,12 @@ def summarize_auxiliary_loss_free_router(
         ),
         "gain_coupled_rate_min": float(getattr(router, "expert_bias_gain_coupled_rate_min", 0.05)),
         "gain_coupled_rate_max": float(getattr(router, "expert_bias_gain_coupled_rate_max", 0.3)),
+        "adaptive_per_expert_beta": float(
+            getattr(router, "expert_bias_adaptive_per_expert_beta", 0.9)
+        ),
+        "adaptive_per_expert_epsilon": float(
+            getattr(router, "expert_bias_adaptive_per_expert_epsilon", 1e-8)
+        ),
         "adaptive_ema_beta": float(getattr(router, "last_adaptive_ema_beta", torch.tensor(0.0)).item()),
         "normalized_feedback_gain": float(
             getattr(router, "last_normalized_feedback_gain", torch.tensor(0.0)).item()
@@ -554,6 +560,12 @@ def summarize_auxiliary_loss_free_router(
         "bias_update_steps": int(router.bias_update_steps.item()),
         "load": summarize_expert_load(counts=router.last_expert_load),
         "bias": summarize_expert_bias(router.expert_bias),
+        "load_error_second_moment": summarize_expert_bias(
+            getattr(router, "load_error_second_moment", torch.zeros(router.num_experts))
+        ),
+        "effective_update_rate": summarize_expert_bias(
+            getattr(router, "last_effective_update_rate", torch.zeros(router.num_experts))
+        ),
         "last_bias_delta": [float(value) for value in router.last_bias_delta.detach().cpu().tolist()],
         "load_error_ema": [float(value) for value in router.load_error_ema.detach().cpu().tolist()],
         "load_error_accumulator": [

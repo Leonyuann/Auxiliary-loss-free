@@ -30,6 +30,31 @@ bias_delta = update_rate * sign(target_fraction - observed_fraction)
 `bias_ema_beta`. `accumulated_sign` accumulates load error across
 `update_interval` forwards and then applies one signed update.
 
+`adaptive_per_expert` maintains an FP32 second moment for each expert. For the
+complete optimizer-step target-minus-observed load fraction `error_i`, it applies:
+
+```text
+v_i = beta * v_i + (1 - beta) * error_i ** 2
+effective_rate_i = scheduled_base_rate / sqrt(v_i + epsilon)
+bias_delta_i = effective_rate_i * error_i
+```
+
+The current error is incorporated into `v_i` before computing that step's effective
+rate, preventing a zero-initialized denominator from amplifying the first update.
+The update is not mean-centered, and this first version deliberately omits momentum
+and bias correction so the per-expert second-moment effect remains isolated. Under
+DDP, each forward first all-reduces expert counts and the router accumulates those
+global counts across all gradient-accumulation microbatches. Both `v_i` and bias are
+updated once from that complete optimizer-step load. Checkpoints preserve `v_i` and
+the last effective-rate vector as router buffers; both remain FP32 when model weights
+are BF16.
+
+The 104M OWT config uses base rate `1e-3`, and the 300M C4 config uses `5e-4`.
+These match each scale's sign-policy baseline, making the experiment a controller
+ablation rather than changing the nominal base step at the same time. Both configs
+start with `beta=0.9` and `epsilon=1e-8`; tune them only after comparing the logged
+effective-rate distribution with load balance and LM quality.
+
 `adaptive_ema_variance` computes a per-layer beta from the complete global
 optimizer-step expert counts. For expert fractions `p`, uniform target `u`, `E`
 experts, and `N` assignments:

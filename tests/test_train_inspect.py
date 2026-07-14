@@ -242,6 +242,44 @@ def test_adaptive_ema_policies_log_dynamic_router_state(tmp_path: Path) -> None:
             assert summary["gain_coupled_normalized_gain"] > 0.0
 
 
+def test_adaptive_per_expert_policy_runs_tiny_train_and_logs_state(tmp_path: Path) -> None:
+    """Tiny training should update and expose per-expert second-moment state."""
+
+    output_dir = tmp_path / "adaptive-per-expert"
+    checkpoint = train(
+        "experiments/qwen3_moe_tiny_alf.py",
+        [
+            "--training.max_steps",
+            "1",
+            "--training.output_dir",
+            str(output_dir),
+            "--training.save_every",
+            "1",
+            "--alf.bias_update_policy",
+            "adaptive_per_expert",
+            "--alf.bias_update_rate",
+            "0.001",
+            "--wandb.enabled",
+            "false",
+        ],
+    )
+    records = [
+        json.loads(line)
+        for line in (output_dir / "metrics.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    train_record = next(record for record in records if "train" in record)
+
+    for summary in train_record["router"]["routers"].values():
+        assert summary["bias_update_policy"] == "adaptive_per_expert"
+        assert summary["load_error_second_moment"]["max"] >= 0.0
+        assert summary["effective_update_rate"]["max"] > 0.0
+
+    inspected = inspect_router(checkpoint)
+    for summary in inspected["routers"].values():
+        assert summary["load_error_second_moment"]["values"]
+        assert summary["effective_update_rate"]["values"]
+
+
 def test_alf_bias_max_update_step_freezes_training_updates(tmp_path: Path) -> None:
     """Training should stop reporting bias updates after the configured step."""
 

@@ -197,6 +197,8 @@ Supported ALF bias update policies:
 - `adaptive_ema_gain_coupled`: reuse the persistent/oscillation beta estimator
   and adapt the update rate to keep EMA-normalized feedback gain approximately
   constant, subject to safety clipping.
+- `adaptive_per_expert`: keep an FP32 EMA of squared load error for each expert
+  and scale its update by `base_rate / sqrt(second_moment + epsilon)`.
 - `accumulated_sign`: accumulate load error over an interval, then apply a sign step.
 - `balanced_topk_sign`: update the most imbalanced positive and negative experts.
 
@@ -235,6 +237,23 @@ the same adaptive beta with target normalized gain `1/30` clipped to rates
 includes `NPROC_PER_NODE` and `GRADIENT_ACCUMULATION_STEPS` in its prepared token
 budget. These policies are currently implemented only in the Hugging Face/PyTorch
 training path, not the Megatron router adapter.
+
+Run the per-expert controller as an opt-in baseline at either scale:
+
+```bash
+RUN_ALF=0 RUN_EMA=0 RUN_AUX=0 RUN_ADAPTIVE_PER_EXPERT=1 \
+  bash scripts/run_owt_104m_baselines.sh
+
+RUN_ALF=0 RUN_EMA=0 RUN_AUX=0 RUN_ADAPTIVE_PER_EXPERT=1 \
+  bash scripts/run_c4_300m_baselines.sh
+```
+
+The launchers expose `ALF_ADAPTIVE_PER_EXPERT_BASE_RATE`,
+`ALF_ADAPTIVE_PER_EXPERT_BETA`, and `ALF_ADAPTIVE_PER_EXPERT_EPSILON`. Defaults
+are base rate `1e-3` for 104M and `5e-4` for 300M, matching each scale's sign
+baseline, with `beta=0.9` and `epsilon=1e-8`. Router checkpoints and JSONL/W&B
+summaries preserve and expose the FP32 per-expert second moments and effective
+update rates.
 
 Checkpoints include the experiment config in `alf_experiment_config.json`, so a copied
 checkpoint directory can still be inspected with `alf-inspect-router`.
