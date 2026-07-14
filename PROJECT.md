@@ -228,3 +228,30 @@ Acceptance criteria:
 - The gain-coupled policy preserves persistent/oscillation beta state exactly.
 - Both scale launchers expose the same three-way ablation with seed overrides.
 - `uv run pytest` and launcher syntax checks pass.
+
+## Sprint 9: Adaptive Per-Expert Momentum
+
+Status: complete.
+
+Passes: true.
+
+Goal: extend per-expert second-moment bias adaptation with an optional smoothed
+load-error direction in controlled 104M OWT and 300M C4 experiments.
+
+Deliverables:
+
+- Add an `adaptive_per_expert_momentum` policy with checkpointed FP32 first and
+  second moments.
+- Expose momentum configuration and state through typed configs, router metrics,
+  JSONL, W&B, and checkpoint inspection.
+- Add matched OWT and C4 experiment configs plus opt-in launcher branches.
+- Audit the original policy formula and align its OWT training settings with the
+  same-scale sign baseline.
+
+Acceptance criteria:
+
+- Exact two-step tests verify first-moment and second-moment update ordering.
+- Both experiment configs differ from their scale baselines only in controller
+  settings and output directory.
+- Tiny training, checkpoint restore, full pytest, compilation, and launcher syntax
+  checks pass.

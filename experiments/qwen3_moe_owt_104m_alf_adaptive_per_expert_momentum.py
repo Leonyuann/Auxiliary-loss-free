@@ -1,9 +1,9 @@
-"""104M Qwen3 MoE OWT per-expert adaptive bias-rate experiment."""
+"""104M Qwen3 MoE OWT per-expert adaptive bias-rate experiment with momentum."""
 
 from alf.config import AlfConfig, DataConfig, EvalConfig, ExperimentConfig, ModelConfig, TrainingConfig, WandbConfig
 
 config = ExperimentConfig(
-    name="qwen3_moe_owt_104m_alf_adaptive_per_expert",
+    name="qwen3_moe_owt_104m_alf_adaptive_per_expert_momentum",
     model=ModelConfig(
         use_tiny_config=True,
         tokenizer_name_or_path="/vepfs-mlp2/ylq/tokenizers/owt_bpe_32k",
@@ -26,7 +26,7 @@ config = ExperimentConfig(
     ),
     eval=EvalConfig(eval_every=500, eval_batch_size=16, max_eval_samples=2048),
     training=TrainingConfig(
-        output_dir="outputs/qwen3_moe_owt_104m_alf_adaptive_per_expert",
+        output_dir="outputs/qwen3_moe_owt_104m_alf_adaptive_per_expert_momentum",
         seed=42,
         max_steps=10_000,
         batch_size=128,
@@ -42,8 +42,9 @@ config = ExperimentConfig(
     alf=AlfConfig(
         enabled=True,
         bias_update_rate=1e-3,
-        bias_update_policy="adaptive_per_expert",
+        bias_update_policy="adaptive_per_expert_momentum",
         bias_adaptive_per_expert_beta=0.9,
+        bias_adaptive_per_expert_momentum_beta=0.9,
         bias_adaptive_per_expert_epsilon=1e-8,
         bias_init=0.0,
         bias_clip=None,
@@ -58,6 +59,7 @@ config = ExperimentConfig(
         tags=[
             "alf",
             "adaptive-per-expert",
+            "momentum",
             "qwen3-moe",
             "owt",
             "104m",

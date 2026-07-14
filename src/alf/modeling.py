@@ -213,6 +213,7 @@ def replace_qwen3_moe_routers(
     expert_bias_gain_coupled_rate_min: float = 0.05,
     expert_bias_gain_coupled_rate_max: float = 0.3,
     expert_bias_adaptive_per_expert_beta: float = 0.9,
+    expert_bias_adaptive_per_expert_momentum_beta: float = 0.9,
     expert_bias_adaptive_per_expert_epsilon: float = 1e-8,
     expert_bias_update_topk: int = 1,
     expert_bias_update_schedule: str = "constant",
@@ -245,6 +246,8 @@ def replace_qwen3_moe_routers(
         expert_bias_gain_coupled_rate_max: Maximum gain-coupled update rate.
         expert_bias_adaptive_per_expert_beta: EMA decay for per-expert squared
             load error.
+        expert_bias_adaptive_per_expert_momentum_beta: EMA decay for per-expert
+            load-error momentum.
         expert_bias_adaptive_per_expert_epsilon: Positive denominator stabilizer
             for per-expert adaptive update rates.
         expert_bias_update_topk: Number of positive-error and negative-error experts
@@ -295,6 +298,9 @@ def replace_qwen3_moe_routers(
             expert_bias_gain_coupled_rate_min=expert_bias_gain_coupled_rate_min,
             expert_bias_gain_coupled_rate_max=expert_bias_gain_coupled_rate_max,
             expert_bias_adaptive_per_expert_beta=expert_bias_adaptive_per_expert_beta,
+            expert_bias_adaptive_per_expert_momentum_beta=(
+                expert_bias_adaptive_per_expert_momentum_beta
+            ),
             expert_bias_adaptive_per_expert_epsilon=expert_bias_adaptive_per_expert_epsilon,
             expert_bias_update_topk=expert_bias_update_topk,
             expert_bias_update_schedule=expert_bias_update_schedule,
@@ -377,6 +383,9 @@ def apply_aux_loss_free_router(model: nn.Module, alf_config: Any | None = None) 
         ),
         expert_bias_adaptive_per_expert_beta=float(
             _config_value(alf_config, "bias_adaptive_per_expert_beta", 0.9)
+        ),
+        expert_bias_adaptive_per_expert_momentum_beta=float(
+            _config_value(alf_config, "bias_adaptive_per_expert_momentum_beta", 0.9)
         ),
         expert_bias_adaptive_per_expert_epsilon=float(
             _config_value(alf_config, "bias_adaptive_per_expert_epsilon", 1e-8)

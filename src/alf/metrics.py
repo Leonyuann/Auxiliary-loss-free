@@ -531,6 +531,9 @@ def summarize_auxiliary_loss_free_router(
         "adaptive_per_expert_beta": float(
             getattr(router, "expert_bias_adaptive_per_expert_beta", 0.9)
         ),
+        "adaptive_per_expert_momentum_beta": float(
+            getattr(router, "expert_bias_adaptive_per_expert_momentum_beta", 0.9)
+        ),
         "adaptive_per_expert_epsilon": float(
             getattr(router, "expert_bias_adaptive_per_expert_epsilon", 1e-8)
         ),
@@ -562,6 +565,9 @@ def summarize_auxiliary_loss_free_router(
         "bias": summarize_expert_bias(router.expert_bias),
         "load_error_second_moment": summarize_expert_bias(
             getattr(router, "load_error_second_moment", torch.zeros(router.num_experts))
+        ),
+        "load_error_momentum": summarize_expert_bias(
+            getattr(router, "load_error_momentum", torch.zeros(router.num_experts))
         ),
         "effective_update_rate": summarize_expert_bias(
             getattr(router, "last_effective_update_rate", torch.zeros(router.num_experts))

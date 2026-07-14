@@ -51,6 +51,8 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         expert_bias_gain_coupled_rate_max: Maximum gain-coupled update rate.
         expert_bias_adaptive_per_expert_beta: EMA decay for each expert's squared
             load error.
+        expert_bias_adaptive_per_expert_momentum_beta: EMA decay for each expert's
+            load-error momentum.
         expert_bias_adaptive_per_expert_epsilon: Positive stabilizer in each
             expert's adaptive-rate denominator.
         expert_bias_update_interval: Number of optimizer steps between bias updates.
@@ -89,6 +91,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         "last_excess_load_variance",
         "last_batch_noise",
         "load_error_second_moment",
+        "load_error_momentum",
         "last_effective_update_rate",
     )
 
@@ -112,6 +115,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         expert_bias_gain_coupled_rate_min: float = 0.05,
         expert_bias_gain_coupled_rate_max: float = 0.3,
         expert_bias_adaptive_per_expert_beta: float = 0.9,
+        expert_bias_adaptive_per_expert_momentum_beta: float = 0.9,
         expert_bias_adaptive_per_expert_epsilon: float = 1e-8,
         expert_bias_update_topk: int = 1,
         expert_bias_update_schedule: str = "constant",
@@ -134,7 +138,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
                 `proportional`, `sign`, `ema`, `adaptive_ema_variance`,
                 `adaptive_ema_persistent_oscillation`,
                 `adaptive_ema_gain_coupled`, `adaptive_per_expert`,
-                `accumulated_sign`, and
+                `adaptive_per_expert_momentum`, `accumulated_sign`, and
                 `balanced_topk_sign`.
             expert_bias_update_interval: Number of optimizer steps between updates.
             expert_bias_adaptive_beta_min: Minimum adaptive EMA beta.
@@ -149,6 +153,8 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
             expert_bias_gain_coupled_rate_max: Maximum gain-coupled update rate.
             expert_bias_adaptive_per_expert_beta: EMA decay for each expert's
                 squared load error.
+            expert_bias_adaptive_per_expert_momentum_beta: EMA decay for each
+                expert's load-error momentum.
             expert_bias_adaptive_per_expert_epsilon: Positive stabilizer in each
                 expert's adaptive-rate denominator.
             expert_bias_update_topk: Number of positive-error and negative-error experts
@@ -211,6 +217,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
             "adaptive_ema_persistent_oscillation",
             "adaptive_ema_gain_coupled",
             "adaptive_per_expert",
+            "adaptive_per_expert_momentum",
             "accumulated_sign",
             "balanced_topk_sign",
         }
@@ -276,6 +283,15 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
                 f"0 <= beta < 1, got {expert_bias_adaptive_per_expert_beta}."
             )
             raise ValueError(msg)
+        if not math.isfinite(expert_bias_adaptive_per_expert_momentum_beta) or not (
+            0.0 <= expert_bias_adaptive_per_expert_momentum_beta < 1.0
+        ):
+            msg = (
+                "expert_bias_adaptive_per_expert_momentum_beta must be finite and "
+                "satisfy 0 <= beta < 1, got "
+                f"{expert_bias_adaptive_per_expert_momentum_beta}."
+            )
+            raise ValueError(msg)
         if not math.isfinite(expert_bias_adaptive_per_expert_epsilon) or (
             expert_bias_adaptive_per_expert_epsilon <= 0.0
         ):
@@ -301,6 +317,9 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         self.expert_bias_gain_coupled_rate_min = float(expert_bias_gain_coupled_rate_min)
         self.expert_bias_gain_coupled_rate_max = float(expert_bias_gain_coupled_rate_max)
         self.expert_bias_adaptive_per_expert_beta = float(expert_bias_adaptive_per_expert_beta)
+        self.expert_bias_adaptive_per_expert_momentum_beta = float(
+            expert_bias_adaptive_per_expert_momentum_beta
+        )
         self.expert_bias_adaptive_per_expert_epsilon = float(expert_bias_adaptive_per_expert_epsilon)
         self.expert_bias_update_topk = int(expert_bias_update_topk)
         self.expert_bias_update_schedule = expert_bias_update_schedule
@@ -341,6 +360,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         self.register_buffer("last_excess_load_variance", torch.zeros((), dtype=torch.float32))
         self.register_buffer("last_batch_noise", torch.zeros((), dtype=torch.float32))
         self.register_buffer("load_error_second_moment", torch.zeros(self.num_experts, dtype=torch.float32))
+        self.register_buffer("load_error_momentum", torch.zeros(self.num_experts, dtype=torch.float32))
         self.register_buffer("last_effective_update_rate", torch.zeros(self.num_experts, dtype=torch.float32))
 
     def _apply(self, fn: Any, recurse: bool = True) -> "Qwen3MoeAuxiliaryLossFreeTopKRouter":
@@ -378,6 +398,7 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
         expert_bias_gain_coupled_rate_min: float = 0.05,
         expert_bias_gain_coupled_rate_max: float = 0.3,
         expert_bias_adaptive_per_expert_beta: float = 0.9,
+        expert_bias_adaptive_per_expert_momentum_beta: float = 0.9,
         expert_bias_adaptive_per_expert_epsilon: float = 1e-8,
         expert_bias_update_topk: int = 1,
         expert_bias_update_schedule: str = "constant",
@@ -407,6 +428,8 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
             expert_bias_gain_coupled_rate_max: Maximum gain-coupled update rate.
             expert_bias_adaptive_per_expert_beta: EMA decay for each expert's
                 squared load error.
+            expert_bias_adaptive_per_expert_momentum_beta: EMA decay for each
+                expert's load-error momentum.
             expert_bias_adaptive_per_expert_epsilon: Positive stabilizer in each
                 expert's adaptive-rate denominator.
             expert_bias_update_topk: Number of positive-error and negative-error experts
@@ -445,6 +468,9 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
             expert_bias_gain_coupled_rate_min=expert_bias_gain_coupled_rate_min,
             expert_bias_gain_coupled_rate_max=expert_bias_gain_coupled_rate_max,
             expert_bias_adaptive_per_expert_beta=expert_bias_adaptive_per_expert_beta,
+            expert_bias_adaptive_per_expert_momentum_beta=(
+                expert_bias_adaptive_per_expert_momentum_beta
+            ),
             expert_bias_adaptive_per_expert_epsilon=expert_bias_adaptive_per_expert_epsilon,
             expert_bias_update_topk=expert_bias_update_topk,
             expert_bias_update_schedule=expert_bias_update_schedule,
@@ -582,7 +608,10 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
                     if self.expert_bias_update_policy == "adaptive_ema_gain_coupled":
                         update_rate = self._gain_coupled_update_rate()
                     bias_delta = update_rate * self.load_error_ema
-                elif self.expert_bias_update_policy == "adaptive_per_expert":
+                elif self.expert_bias_update_policy in {
+                    "adaptive_per_expert",
+                    "adaptive_per_expert_momentum",
+                }:
                     load_error = load_error.to(
                         device=self.load_error_second_moment.device,
                         dtype=self.load_error_second_moment.dtype,
@@ -598,7 +627,16 @@ class Qwen3MoeAuxiliaryLossFreeTopKRouter(nn.Module):
                         + self.expert_bias_adaptive_per_expert_epsilon
                     )
                     self.last_effective_update_rate.copy_(effective_update_rate)
-                    bias_delta = effective_update_rate * load_error
+                    if self.expert_bias_update_policy == "adaptive_per_expert_momentum":
+                        momentum_beta = self.expert_bias_adaptive_per_expert_momentum_beta
+                        self.load_error_momentum.mul_(momentum_beta).add_(
+                            load_error,
+                            alpha=1.0 - momentum_beta,
+                        )
+                        update_direction = self.load_error_momentum
+                    else:
+                        update_direction = load_error
+                    bias_delta = effective_update_rate * update_direction
                 else:
                     bias_delta = update_rate * load_error
 

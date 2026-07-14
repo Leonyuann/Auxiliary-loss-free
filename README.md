@@ -199,6 +199,8 @@ Supported ALF bias update policies:
   constant, subject to safety clipping.
 - `adaptive_per_expert`: keep an FP32 EMA of squared load error for each expert
   and scale its update by `base_rate / sqrt(second_moment + epsilon)`.
+- `adaptive_per_expert_momentum`: add an FP32 EMA of load error and use it as
+  the update direction with the same per-expert second-moment scaling.
 - `accumulated_sign`: accumulate load error over an interval, then apply a sign step.
 - `balanced_topk_sign`: update the most imbalanced positive and negative experts.
 
@@ -248,12 +250,15 @@ RUN_ALF=0 RUN_EMA=0 RUN_AUX=0 RUN_ADAPTIVE_PER_EXPERT=1 \
   bash scripts/run_c4_300m_baselines.sh
 ```
 
+Set `RUN_ADAPTIVE_PER_EXPERT_MOMENTUM=1` instead to run the matched momentum
+variant at either scale.
+
 The launchers expose `ALF_ADAPTIVE_PER_EXPERT_BASE_RATE`,
-`ALF_ADAPTIVE_PER_EXPERT_BETA`, and `ALF_ADAPTIVE_PER_EXPERT_EPSILON`. Defaults
-are base rate `1e-3` for 104M and `5e-4` for 300M, matching each scale's sign
-baseline, with `beta=0.9` and `epsilon=1e-8`. Router checkpoints and JSONL/W&B
-summaries preserve and expose the FP32 per-expert second moments and effective
-update rates.
+`ALF_ADAPTIVE_PER_EXPERT_BETA`, `ALF_ADAPTIVE_PER_EXPERT_MOMENTUM_BETA`,
+and `ALF_ADAPTIVE_PER_EXPERT_EPSILON`. Defaults are base rate `1e-3` for 104M and `5e-4` for
+300M, matching each scale's sign baseline, with second-moment `beta=0.9`, momentum `beta=0.9`, and
+`epsilon=1e-8`. Router checkpoints and JSONL/W&B summaries preserve
+and expose FP32 per-expert first moments, second moments, and effective update rates.
 
 Checkpoints include the experiment config in `alf_experiment_config.json`, so a copied
 checkpoint directory can still be inspected with `alf-inspect-router`.

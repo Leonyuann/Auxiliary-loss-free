@@ -73,6 +73,7 @@ def test_c4_configs_disable_gradient_checkpointing_for_fair_comparison() -> None
         "experiments/qwen3_moe_c4_300m_alf.py",
         "experiments/qwen3_moe_c4_300m_alf_ema.py",
         "experiments/qwen3_moe_c4_300m_alf_adaptive_per_expert.py",
+        "experiments/qwen3_moe_c4_300m_alf_adaptive_per_expert_momentum.py",
         "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_variance.py",
         "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_persistent_oscillation.py",
         "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_gain_coupled.py",
@@ -89,6 +90,7 @@ def test_c4_300m_configs_use_reasonable_moe_scale() -> None:
         "experiments/qwen3_moe_c4_300m_alf.py",
         "experiments/qwen3_moe_c4_300m_alf_ema.py",
         "experiments/qwen3_moe_c4_300m_alf_adaptive_per_expert.py",
+        "experiments/qwen3_moe_c4_300m_alf_adaptive_per_expert_momentum.py",
         "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_variance.py",
         "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_persistent_oscillation.py",
         "experiments/qwen3_moe_c4_300m_alf_adaptive_ema_gain_coupled.py",
@@ -227,6 +229,33 @@ def test_adaptive_per_expert_configs_match_scale_baselines() -> None:
         assert replace(config.training, output_dir=baseline.training.output_dir) == baseline.training
 
 
+def test_adaptive_per_expert_momentum_configs_match_scale_baselines() -> None:
+    """Momentum runs should change only controller settings at each model scale."""
+
+    paths = {
+        "experiments/qwen3_moe_owt_104m_alf_adaptive_per_expert_momentum.py": (
+            "experiments/qwen3_moe_owt_104m_alf.py",
+            1e-3,
+        ),
+        "experiments/qwen3_moe_c4_300m_alf_adaptive_per_expert_momentum.py": (
+            "experiments/qwen3_moe_c4_300m_alf.py",
+            5e-4,
+        ),
+    }
+    for path, (baseline_path, base_rate) in paths.items():
+        config = load_experiment_config(path)
+        baseline = load_experiment_config(baseline_path)
+        assert config.alf.bias_update_policy == "adaptive_per_expert_momentum"
+        assert config.alf.bias_update_rate == base_rate
+        assert config.alf.bias_adaptive_per_expert_beta == 0.9
+        assert config.alf.bias_adaptive_per_expert_momentum_beta == 0.9
+        assert config.alf.bias_adaptive_per_expert_epsilon == 1e-8
+        assert config.model == baseline.model
+        assert config.data == baseline.data
+        assert config.eval == baseline.eval
+        assert replace(config.training, output_dir=baseline.training.output_dir) == baseline.training
+
+
 def test_adaptive_ema_experiments_are_exposed_by_baseline_scripts() -> None:
     """Both PyTorch baseline scripts should expose opt-in adaptive EMA runs."""
 
@@ -263,7 +292,10 @@ def test_adaptive_per_expert_experiments_are_exposed_by_baseline_scripts() -> No
         assert "ALF_ADAPTIVE_PER_EXPERT_BASE_RATE" in content
         assert "ALF_ADAPTIVE_PER_EXPERT_BETA" in content
         assert "ALF_ADAPTIVE_PER_EXPERT_EPSILON" in content
+        assert "RUN_ADAPTIVE_PER_EXPERT_MOMENTUM" in content
+        assert "ALF_ADAPTIVE_PER_EXPERT_MOMENTUM_BETA" in content
         assert f"{experiment_prefix}_alf_adaptive_per_expert.py" in content
+        assert f"{experiment_prefix}_alf_adaptive_per_expert_momentum.py" in content
 
 
 def test_owt_baseline_script_supports_multi_gpu_token_budget() -> None:

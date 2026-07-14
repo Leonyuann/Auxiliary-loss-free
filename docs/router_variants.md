@@ -41,13 +41,30 @@ bias_delta_i = effective_rate_i * error_i
 
 The current error is incorporated into `v_i` before computing that step's effective
 rate, preventing a zero-initialized denominator from amplifying the first update.
-The update is not mean-centered, and this first version deliberately omits momentum
-and bias correction so the per-expert second-moment effect remains isolated. Under
+The update is not mean-centered and deliberately omits bias correction, so the
+per-expert second-moment effect remains isolated. Under
 DDP, each forward first all-reduces expert counts and the router accumulates those
 global counts across all gradient-accumulation microbatches. Both `v_i` and bias are
 updated once from that complete optimizer-step load. Checkpoints preserve `v_i` and
 the last effective-rate vector as router buffers; both remain FP32 when model weights
 are BF16.
+
+`adaptive_per_expert_momentum` adds an FP32 first moment while retaining the same
+second-moment denominator:
+
+```text
+m_i = momentum_beta * m_i + (1 - momentum_beta) * error_i
+v_i = second_moment_beta * v_i + (1 - second_moment_beta) * error_i ** 2
+effective_rate_i = scheduled_base_rate / sqrt(v_i + epsilon)
+bias_delta_i = effective_rate_i * m_i
+```
+
+Both moments consume the current complete optimizer-step error before the bias update.
+There is no Adam bias correction; this keeps the experiment focused on whether temporal
+smoothing of the update direction improves over `adaptive_per_expert`. The method
+matches the optional momentum sketch, but neither policy directly assigns rates from
+selection frequency: persistent large errors increase `v_i` and therefore reduce the
+effective rate.
 
 The 104M OWT config uses base rate `1e-3`, and the 300M C4 config uses `5e-4`.
 These match each scale's sign-policy baseline, making the experiment a controller

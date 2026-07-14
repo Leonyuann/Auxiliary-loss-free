@@ -261,6 +261,7 @@ def test_control_buffers_stay_float32_after_bfloat16_cast() -> None:
     assert router.oscillation_energy_ema.dtype == torch.float32
     assert router.last_adaptive_ema_beta.dtype == torch.float32
     assert router.load_error_second_moment.dtype == torch.float32
+    assert router.load_error_momentum.dtype == torch.float32
     assert router.last_effective_update_rate.dtype == torch.float32
 
     router.train()
@@ -303,6 +304,7 @@ def test_router_metric_summary_is_serializable() -> None:
     assert router_summary["persistent_energy_ema"] == 0.0
     assert router_summary["oscillation_energy_ema"] == 0.0
     assert router_summary["load_error_second_moment"]["values"] == [0.0, 0.0]
+    assert router_summary["load_error_momentum"]["values"] == [0.0, 0.0]
     assert router_summary["effective_update_rate"]["values"] == [0.0, 0.0]
 
 
@@ -356,6 +358,46 @@ def test_adaptive_per_expert_updates_moment_before_effective_rate() -> None:
     assert torch.allclose(router.last_effective_update_rate, expected_effective_rate)
     assert torch.allclose(router.last_bias_delta, expected_effective_rate * load_error)
     assert router.last_bias_update_rate.item() == pytest.approx(0.1)
+
+
+def test_adaptive_per_expert_momentum_smooths_update_direction() -> None:
+    """Momentum policy should use first and second load-error moments."""
+
+    router = Qwen3MoeAuxiliaryLossFreeTopKRouter(
+        hidden_size=2,
+        num_experts=4,
+        num_experts_per_tok=1,
+        norm_topk_prob=False,
+        expert_bias_update_rate=0.1,
+        expert_bias_update_policy="adaptive_per_expert_momentum",
+        expert_bias_adaptive_per_expert_beta=0.5,
+        expert_bias_adaptive_per_expert_momentum_beta=0.5,
+        expert_bias_adaptive_per_expert_epsilon=0.25,
+    )
+    first_error = torch.tensor([0.25, 0.125, -0.125, -0.25])
+    with torch.no_grad():
+        router.last_load_fraction.copy_(0.25 - first_error)
+    router._update_expert_bias()
+
+    expected_first_momentum = 0.5 * first_error
+    expected_first_second_moment = 0.5 * first_error.square()
+    expected_first_rate = 0.1 / torch.sqrt(expected_first_second_moment + 0.25)
+    assert torch.allclose(router.load_error_momentum, expected_first_momentum)
+    assert torch.allclose(router.load_error_second_moment, expected_first_second_moment)
+    assert torch.allclose(router.last_bias_delta, expected_first_rate * expected_first_momentum)
+
+    second_error = -first_error
+    with torch.no_grad():
+        router.last_load_fraction.copy_(0.25 - second_error)
+    router._update_expert_bias()
+
+    expected_second_momentum = 0.5 * expected_first_momentum + 0.5 * second_error
+    expected_second_moment = 0.5 * expected_first_second_moment + 0.5 * second_error.square()
+    expected_second_rate = 0.1 / torch.sqrt(expected_second_moment + 0.25)
+    assert torch.allclose(router.load_error_momentum, expected_second_momentum)
+    assert torch.allclose(router.load_error_second_moment, expected_second_moment)
+    assert torch.allclose(router.last_effective_update_rate, expected_second_rate)
+    assert torch.allclose(router.last_bias_delta, expected_second_rate * expected_second_momentum)
 
 
 def test_adaptive_per_expert_uses_global_ddp_optimizer_step_load(monkeypatch) -> None:
@@ -439,6 +481,35 @@ def test_adaptive_per_expert_state_round_trips_and_stays_float32() -> None:
     assert restored.last_effective_update_rate.dtype == torch.float32
     assert torch.equal(restored.load_error_second_moment, router.load_error_second_moment)
     assert torch.equal(restored.last_effective_update_rate, router.last_effective_update_rate)
+
+
+def test_adaptive_per_expert_momentum_state_round_trips_in_float32() -> None:
+    """Momentum state should checkpoint in FP32 when router weights use BF16."""
+
+    router = Qwen3MoeAuxiliaryLossFreeTopKRouter(
+        hidden_size=2,
+        num_experts=2,
+        num_experts_per_tok=1,
+        norm_topk_prob=False,
+        expert_bias_update_rate=0.1,
+        expert_bias_update_policy="adaptive_per_expert_momentum",
+    ).to(dtype=torch.bfloat16)
+    with torch.no_grad():
+        router.last_load_fraction.copy_(torch.tensor([0.25, 0.75]))
+    router._update_expert_bias()
+
+    restored = Qwen3MoeAuxiliaryLossFreeTopKRouter(
+        hidden_size=2,
+        num_experts=2,
+        num_experts_per_tok=1,
+        norm_topk_prob=False,
+        expert_bias_update_rate=0.1,
+        expert_bias_update_policy="adaptive_per_expert_momentum",
+    ).to(dtype=torch.bfloat16)
+    restored.load_state_dict(router.state_dict())
+
+    assert restored.load_error_momentum.dtype == torch.float32
+    assert torch.equal(restored.load_error_momentum, router.load_error_momentum)
 
 
 def test_adaptive_ema_variance_uses_noise_corrected_load_variance() -> None:
@@ -788,6 +859,9 @@ def test_invalid_adaptive_per_expert_parameters_raise() -> None:
         {"expert_bias_adaptive_per_expert_beta": -0.1},
         {"expert_bias_adaptive_per_expert_beta": 1.0},
         {"expert_bias_adaptive_per_expert_beta": float("nan")},
+        {"expert_bias_adaptive_per_expert_momentum_beta": -0.1},
+        {"expert_bias_adaptive_per_expert_momentum_beta": 1.0},
+        {"expert_bias_adaptive_per_expert_momentum_beta": float("nan")},
         {"expert_bias_adaptive_per_expert_epsilon": 0.0},
         {"expert_bias_adaptive_per_expert_epsilon": float("inf")},
     ]

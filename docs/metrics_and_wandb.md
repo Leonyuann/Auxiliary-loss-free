@@ -61,6 +61,10 @@ values plus mean/std/min/max summaries. The latter is the actual coefficient app
 to each expert's load error after denominator scaling, so inspect its max and spread
 when diagnosing an aggressive controller.
 
+For `adaptive_per_expert_momentum`, `load_error_momentum` exposes the checkpointed
+per-expert first moment with the same summary fields. In that policy, the effective
+rate multiplies this smoothed direction rather than the raw current error.
+
 ## Local JSONL
 
 Every run also writes `metrics.jsonl` under the experiment output directory. This
