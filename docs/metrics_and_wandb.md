@@ -64,6 +64,8 @@ when diagnosing an aggressive controller.
 For `adaptive_per_expert_momentum`, `load_error_momentum` exposes the checkpointed
 per-expert first moment with the same summary fields. In that policy, the effective
 rate multiplies this smoothed direction rather than the raw current error.
+Both PyTorch and Megatron Core ALF routers expose these fields through the same
+JSONL/W&B summary schema.
 
 ## Local JSONL
 

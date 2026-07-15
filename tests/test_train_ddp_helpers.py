@@ -203,34 +203,47 @@ def test_adaptive_ema_experiment_configs_match_scale_defaults() -> None:
         assert config.training.seed == 42
 
 
-def test_adaptive_per_expert_configs_match_scale_baselines() -> None:
-    """Per-expert runs should change only controller settings at each model scale."""
+def test_adaptive_per_expert_configs_record_tuned_defaults() -> None:
+    """Per-expert configs should preserve intentional scale-specific tuned defaults."""
 
     paths = {
         "experiments/qwen3_moe_owt_104m_alf_adaptive_per_expert.py": (
             "experiments/qwen3_moe_owt_104m_alf.py",
             1e-3,
+            0.6,
         ),
         "experiments/qwen3_moe_c4_300m_alf_adaptive_per_expert.py": (
             "experiments/qwen3_moe_c4_300m_alf.py",
-            5e-4,
+            1e-3,
+            0.9,
         ),
     }
-    for path, (baseline_path, base_rate) in paths.items():
+    for path, (baseline_path, base_rate, second_moment_beta) in paths.items():
         config = load_experiment_config(path)
         baseline = load_experiment_config(baseline_path)
         assert config.alf.bias_update_policy == "adaptive_per_expert"
         assert config.alf.bias_update_rate == base_rate
-        assert config.alf.bias_adaptive_per_expert_beta == 0.9
+        assert config.alf.bias_adaptive_per_expert_beta == second_moment_beta
         assert config.alf.bias_adaptive_per_expert_epsilon == 1e-8
         assert config.model == baseline.model
         assert config.data == baseline.data
         assert config.eval == baseline.eval
-        assert replace(config.training, output_dir=baseline.training.output_dir) == baseline.training
+        if "owt_104m" in path:
+            assert config.training.learning_rate == 1e-3
+            assert config.training.log_every == 20
+            normalized = replace(
+                config.training,
+                output_dir=baseline.training.output_dir,
+                learning_rate=baseline.training.learning_rate,
+                log_every=baseline.training.log_every,
+            )
+            assert normalized == baseline.training
+        else:
+            assert replace(config.training, output_dir=baseline.training.output_dir) == baseline.training
 
 
-def test_adaptive_per_expert_momentum_configs_match_scale_baselines() -> None:
-    """Momentum runs should change only controller settings at each model scale."""
+def test_adaptive_per_expert_momentum_configs_record_tuned_defaults() -> None:
+    """Momentum configs should preserve tuned rates, betas, and OWT training settings."""
 
     paths = {
         "experiments/qwen3_moe_owt_104m_alf_adaptive_per_expert_momentum.py": (
@@ -239,7 +252,7 @@ def test_adaptive_per_expert_momentum_configs_match_scale_baselines() -> None:
         ),
         "experiments/qwen3_moe_c4_300m_alf_adaptive_per_expert_momentum.py": (
             "experiments/qwen3_moe_c4_300m_alf.py",
-            5e-4,
+            1e-3,
         ),
     }
     for path, (baseline_path, base_rate) in paths.items():
@@ -248,12 +261,23 @@ def test_adaptive_per_expert_momentum_configs_match_scale_baselines() -> None:
         assert config.alf.bias_update_policy == "adaptive_per_expert_momentum"
         assert config.alf.bias_update_rate == base_rate
         assert config.alf.bias_adaptive_per_expert_beta == 0.9
-        assert config.alf.bias_adaptive_per_expert_momentum_beta == 0.9
+        assert config.alf.bias_adaptive_per_expert_momentum_beta == 0.6
         assert config.alf.bias_adaptive_per_expert_epsilon == 1e-8
         assert config.model == baseline.model
         assert config.data == baseline.data
         assert config.eval == baseline.eval
-        assert replace(config.training, output_dir=baseline.training.output_dir) == baseline.training
+        if "owt_104m" in path:
+            assert config.training.learning_rate == 1e-3
+            assert config.training.log_every == 20
+            normalized = replace(
+                config.training,
+                output_dir=baseline.training.output_dir,
+                learning_rate=baseline.training.learning_rate,
+                log_every=baseline.training.log_every,
+            )
+            assert normalized == baseline.training
+        else:
+            assert replace(config.training, output_dir=baseline.training.output_dir) == baseline.training
 
 
 def test_adaptive_ema_experiments_are_exposed_by_baseline_scripts() -> None:

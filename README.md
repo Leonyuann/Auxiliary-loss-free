@@ -89,6 +89,8 @@ Configs:
 ```bash
 experiments/qwen3_moe_c4_1b_megatron_alf.py
 experiments/qwen3_moe_c4_1b_megatron_alf_ema.py
+experiments/qwen3_moe_c4_1b_megatron_alf_adaptive_per_expert.py
+experiments/qwen3_moe_c4_1b_megatron_alf_adaptive_per_expert_momentum.py
 experiments/qwen3_moe_c4_1b_megatron_aux_loss.py
 ```
 
@@ -96,13 +98,19 @@ Scripted launch shape:
 
 ```bash
 RUN_ALF=1 RUN_EMA=0 RUN_AUX=0 MAX_STEPS=10 bash scripts/run_c4_1b_megatron_8xa100.sh
+
+RUN_ALF=0 RUN_EMA=0 RUN_AUX=0 RUN_ADAPTIVE_PER_EXPERT=1 \
+  MAX_STEPS=10 bash scripts/run_c4_1b_megatron_8xa100.sh
+
+RUN_ALF=0 RUN_EMA=0 RUN_AUX=0 RUN_ADAPTIVE_PER_EXPERT_MOMENTUM=1 \
+  MAX_STEPS=10 bash scripts/run_c4_1b_megatron_8xa100.sh
 ```
 
 The launch script also accepts LR-related overrides such as `LR`/`LEARNING_RATE`,
 `WEIGHT_DECAY`, `WARMUP_STEPS`, `SCHEDULER_TYPE`, and `MAX_GRAD_NORM`, plus
 `SAVE_EVERY` and `OUTPUT_ROOT` (`OUTPUT_DIR` remains a compatibility alias for the
-output root). ALF, ALF-EMA, and auxiliary-loss runs write to distinct experiment
-subdirectories below that root. Each branch automatically resumes its own complete
+output root). Every ALF controller and auxiliary-loss run writes to a distinct
+experiment subdirectory below that root. Each branch automatically resumes its own complete
 `latest` checkpoint when present, or starts from scratch when no checkpoint exists.
 `MAX_STEPS` is the final successful optimizer-step target, not the number of
 additional steps after resume.
@@ -237,8 +245,9 @@ the shared adaptive defaults. Use `ALF_NORMALIZED_GAIN`, `ALF_GAIN_RATE_MIN`, an
 the same adaptive beta with target normalized gain `1/30` clipped to rates
 `[0.05, 0.3]`. `BATCH_SIZE` is per process; the OWT launcher automatically
 includes `NPROC_PER_NODE` and `GRADIENT_ACCUMULATION_STEPS` in its prepared token
-budget. These policies are currently implemented only in the Hugging Face/PyTorch
-training path, not the Megatron router adapter.
+budget. These three adaptive EMA policies remain specific to the Hugging Face/PyTorch
+training path. The per-expert second-moment and momentum policies below support
+both PyTorch and Megatron.
 
 Run the per-expert controller as an opt-in baseline at either scale:
 
@@ -255,10 +264,10 @@ variant at either scale.
 
 The launchers expose `ALF_ADAPTIVE_PER_EXPERT_BASE_RATE`,
 `ALF_ADAPTIVE_PER_EXPERT_BETA`, `ALF_ADAPTIVE_PER_EXPERT_MOMENTUM_BETA`,
-and `ALF_ADAPTIVE_PER_EXPERT_EPSILON`. Defaults are base rate `1e-3` for 104M and `5e-4` for
-300M, matching each scale's sign baseline, with second-moment `beta=0.9`, momentum `beta=0.9`, and
-`epsilon=1e-8`. Router checkpoints and JSONL/W&B summaries preserve
-and expose FP32 per-expert first moments, second moments, and effective update rates.
+and `ALF_ADAPTIVE_PER_EXPERT_EPSILON`. The tuned PyTorch defaults use
+base rate `1e-3` at both scales and `epsilon=1e-8`. OWT uses second-moment beta `0.6` without momentum; the
+momentum run uses second-moment beta `0.9` and momentum beta `0.6`. C4 uses second-moment beta `0.9`, plus momentum beta `0.6` for the momentum
+run. Router checkpoints and JSONL/W&B summaries preserve and expose FP32 per-expert first moments, second moments, and effective update rates.
 
 Checkpoints include the experiment config in `alf_experiment_config.json`, so a copied
 checkpoint directory can still be inspected with `alf-inspect-router`.

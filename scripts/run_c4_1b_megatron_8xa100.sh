@@ -35,6 +35,8 @@ save_every="${SAVE_EVERY:-10000}"
 output_root="${OUTPUT_ROOT:-${OUTPUT_DIR:-$project_root/outputs}}"
 alf_output_dir="$output_root/qwen3_moe_c4_1b_megatron_alf"
 ema_output_dir="$output_root/qwen3_moe_c4_1b_megatron_alf_ema"
+adaptive_per_expert_output_dir="$output_root/qwen3_moe_c4_1b_megatron_alf_adaptive_per_expert"
+adaptive_per_expert_momentum_output_dir="$output_root/qwen3_moe_c4_1b_megatron_alf_adaptive_per_expert_momentum"
 aux_output_dir="$output_root/qwen3_moe_c4_1b_megatron_aux_loss"
 
 wandb_enabled="${WANDB_ENABLED:-true}"
@@ -81,6 +83,25 @@ if [[ "${RUN_EMA:-1}" == "1" ]]; then
     --alf.bias_ema_beta "${ALF_EMA_BETA:-0.5}" \
     --alf.bias_update_rate "${ALF_EMA_RATE:-1e-1}" \
     --training.output_dir "$ema_output_dir"
+fi
+
+if [[ "${RUN_ADAPTIVE_PER_EXPERT:-0}" == "1" ]]; then
+  "${train_cmd[@]}" "${torchrun_args[@]}" experiments/qwen3_moe_c4_1b_megatron_alf_adaptive_per_expert.py \
+    "${common_overrides[@]}" \
+    --alf.bias_update_rate "${ALF_ADAPTIVE_PER_EXPERT_BASE_RATE:-1e-3}" \
+    --alf.bias_adaptive_per_expert_beta "${ALF_ADAPTIVE_PER_EXPERT_BETA:-0.9}" \
+    --alf.bias_adaptive_per_expert_epsilon "${ALF_ADAPTIVE_PER_EXPERT_EPSILON:-1e-8}" \
+    --training.output_dir "$adaptive_per_expert_output_dir"
+fi
+
+if [[ "${RUN_ADAPTIVE_PER_EXPERT_MOMENTUM:-0}" == "1" ]]; then
+  "${train_cmd[@]}" "${torchrun_args[@]}" experiments/qwen3_moe_c4_1b_megatron_alf_adaptive_per_expert_momentum.py \
+    "${common_overrides[@]}" \
+    --alf.bias_update_rate "${ALF_ADAPTIVE_PER_EXPERT_BASE_RATE:-1e-3}" \
+    --alf.bias_adaptive_per_expert_beta "${ALF_ADAPTIVE_PER_EXPERT_BETA:-0.9}" \
+    --alf.bias_adaptive_per_expert_momentum_beta "${ALF_ADAPTIVE_PER_EXPERT_MOMENTUM_BETA:-0.6}" \
+    --alf.bias_adaptive_per_expert_epsilon "${ALF_ADAPTIVE_PER_EXPERT_EPSILON:-1e-8}" \
+    --training.output_dir "$adaptive_per_expert_momentum_output_dir"
 fi
 
 if [[ "${RUN_AUX:-0}" == "1" ]]; then

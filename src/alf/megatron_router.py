@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import torch
@@ -173,6 +174,9 @@ if TopKRouter is not None:
             "last_bias_update_rate",
             "load_error_ema",
             "load_error_accumulator",
+            "load_error_second_moment",
+            "load_error_momentum",
+            "last_effective_update_rate",
         )
 
         def __init__(self, *args: Any, alf_config: Any | None = None, **kwargs: Any) -> None:
@@ -205,6 +209,15 @@ if TopKRouter is not None:
             self.expert_bias_update_policy = str(_config_value(alf_config, "bias_update_policy", "proportional"))
             self.expert_bias_update_interval = int(_config_value(alf_config, "update_interval", 1))
             self.expert_bias_ema_beta = float(_config_value(alf_config, "bias_ema_beta", 0.9))
+            self.expert_bias_adaptive_per_expert_beta = float(
+                _config_value(alf_config, "bias_adaptive_per_expert_beta", 0.9)
+            )
+            self.expert_bias_adaptive_per_expert_momentum_beta = float(
+                _config_value(alf_config, "bias_adaptive_per_expert_momentum_beta", 0.9)
+            )
+            self.expert_bias_adaptive_per_expert_epsilon = float(
+                _config_value(alf_config, "bias_adaptive_per_expert_epsilon", 1e-8)
+            )
             self.expert_bias_update_topk = int(_config_value(alf_config, "bias_update_topk", 1))
             self.expert_bias_update_schedule = str(_config_value(alf_config, "bias_update_schedule", "constant"))
             self.expert_bias_update_schedule_steps = _config_value(alf_config, "bias_update_schedule_steps", None)
@@ -232,6 +245,23 @@ if TopKRouter is not None:
             self.register_buffer("last_bias_update_rate", torch.zeros((), dtype=torch.float32))
             self.register_buffer("load_error_ema", torch.zeros(num_experts, dtype=torch.float32))
             self.register_buffer("load_error_accumulator", torch.zeros(num_experts, dtype=torch.float32))
+            if self.expert_bias_update_policy in {
+                "adaptive_per_expert",
+                "adaptive_per_expert_momentum",
+            }:
+                self.register_buffer(
+                    "load_error_second_moment",
+                    torch.zeros(num_experts, dtype=torch.float32),
+                )
+                self.register_buffer(
+                    "last_effective_update_rate",
+                    torch.zeros(num_experts, dtype=torch.float32),
+                )
+            if self.expert_bias_update_policy == "adaptive_per_expert_momentum":
+                self.register_buffer(
+                    "load_error_momentum",
+                    torch.zeros(num_experts, dtype=torch.float32),
+                )
 
         def _validate_alf_state(self) -> None:
             """Validate ALF hyperparameters installed on the Megatron router.
@@ -254,7 +284,33 @@ if TopKRouter is not None:
                 raise ValueError("bias_clip must be non-negative.")
             if not 0.0 <= self.expert_bias_ema_beta < 1.0:
                 raise ValueError("bias_ema_beta must satisfy 0 <= beta < 1.")
-            valid_policies = {"proportional", "sign", "ema", "accumulated_sign", "balanced_topk_sign"}
+            if not math.isfinite(self.expert_bias_adaptive_per_expert_beta) or not (
+                0.0 <= self.expert_bias_adaptive_per_expert_beta < 1.0
+            ):
+                raise ValueError(
+                    "bias_adaptive_per_expert_beta must be finite and satisfy 0 <= beta < 1."
+                )
+            if not math.isfinite(self.expert_bias_adaptive_per_expert_momentum_beta) or not (
+                0.0 <= self.expert_bias_adaptive_per_expert_momentum_beta < 1.0
+            ):
+                raise ValueError(
+                    "bias_adaptive_per_expert_momentum_beta must be finite and satisfy 0 <= beta < 1."
+                )
+            if not math.isfinite(self.expert_bias_adaptive_per_expert_epsilon) or (
+                self.expert_bias_adaptive_per_expert_epsilon <= 0.0
+            ):
+                raise ValueError(
+                    "bias_adaptive_per_expert_epsilon must be finite and greater than zero."
+                )
+            valid_policies = {
+                "proportional",
+                "sign",
+                "ema",
+                "adaptive_per_expert",
+                "adaptive_per_expert_momentum",
+                "accumulated_sign",
+                "balanced_topk_sign",
+            }
             if self.expert_bias_update_policy not in valid_policies:
                 raise ValueError(f"Unsupported ALF policy: {self.expert_bias_update_policy!r}.")
             valid_schedules = {"constant", "linear"}
@@ -344,6 +400,8 @@ if TopKRouter is not None:
                 if int(accumulated_load.sum().item()) == 0:
                     self.last_bias_delta.zero_()
                     self.last_bias_update_rate.zero_()
+                    if hasattr(self, "last_effective_update_rate"):
+                        self.last_effective_update_rate.zero_()
                     return False
                 self._set_load_statistics(accumulated_load.to(device=self.last_expert_load.device, dtype=torch.long))
                 previous_updates = int(self.bias_update_steps.item())
@@ -357,6 +415,8 @@ if TopKRouter is not None:
                 self.training_steps.add_(1)
                 self.last_bias_delta.zero_()
                 self.last_bias_update_rate.zero_()
+                if hasattr(self, "last_effective_update_rate"):
+                    self.last_effective_update_rate.zero_()
                 if self.expert_bias_update_rate == 0.0:
                     return
                 current_step = int(self.training_steps.item())
@@ -392,6 +452,35 @@ if TopKRouter is not None:
                             alpha=1.0 - self.expert_bias_ema_beta,
                         )
                         bias_delta = update_rate * self.load_error_ema
+                    elif self.expert_bias_update_policy in {
+                        "adaptive_per_expert",
+                        "adaptive_per_expert_momentum",
+                    }:
+                        load_error = load_error.to(
+                            device=self.load_error_second_moment.device,
+                            dtype=self.load_error_second_moment.dtype,
+                        )
+                        second_moment_beta = self.expert_bias_adaptive_per_expert_beta
+                        self.load_error_second_moment.mul_(second_moment_beta).addcmul_(
+                            load_error,
+                            load_error,
+                            value=1.0 - second_moment_beta,
+                        )
+                        effective_update_rate = update_rate / torch.sqrt(
+                            self.load_error_second_moment
+                            + self.expert_bias_adaptive_per_expert_epsilon
+                        )
+                        self.last_effective_update_rate.copy_(effective_update_rate)
+                        if self.expert_bias_update_policy == "adaptive_per_expert_momentum":
+                            momentum_beta = self.expert_bias_adaptive_per_expert_momentum_beta
+                            self.load_error_momentum.mul_(momentum_beta).add_(
+                                load_error,
+                                alpha=1.0 - momentum_beta,
+                            )
+                            update_direction = self.load_error_momentum
+                        else:
+                            update_direction = load_error
+                        bias_delta = effective_update_rate * update_direction
                     else:
                         bias_delta = update_rate * load_error
                 self.expert_bias.add_(bias_delta.to(device=self.expert_bias.device, dtype=self.expert_bias.dtype))

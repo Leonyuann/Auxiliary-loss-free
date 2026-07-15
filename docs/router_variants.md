@@ -66,11 +66,12 @@ matches the optional momentum sketch, but neither policy directly assigns rates 
 selection frequency: persistent large errors increase `v_i` and therefore reduce the
 effective rate.
 
-The 104M OWT config uses base rate `1e-3`, and the 300M C4 config uses `5e-4`.
-These match each scale's sign-policy baseline, making the experiment a controller
-ablation rather than changing the nominal base step at the same time. Both configs
-start with `beta=0.9` and `epsilon=1e-8`; tune them only after comparing the logged
-effective-rate distribution with load balance and LM quality.
+The tuned 104M OWT and 300M C4 configs use base rate `1e-3` and
+`epsilon=1e-8`. OWT `adaptive_per_expert` uses second-moment beta `0.6`; its
+momentum counterpart uses second-moment beta `0.9` and momentum beta `0.6`.
+Both C4 variants use second-moment beta `0.9`, and the momentum variant uses
+momentum beta `0.6`. The OWT variants also intentionally use training learning
+rate `1e-3` and log every 20 steps.
 
 `adaptive_ema_variance` computes a per-layer beta from the complete global
 optimizer-step expert counts. For expert fractions `p`, uniform target `u`, `E`
@@ -187,3 +188,11 @@ exclude the EP dimension. Reducing over the world group would double-count exper
 parallel shards and corrupt both MaxVio metrics and ALF bias updates. Each router
 accumulates local counts over all gradient-accumulation microbatches, then performs
 one expert-DP reduction after a successful optimizer step before updating bias.
+
+The production Megatron Core router supports both `adaptive_per_expert` and
+`adaptive_per_expert_momentum` with the same equations and update ordering as the
+PyTorch router. It registers policy-specific FP32 first/second-moment and effective-rate
+buffers, reduces complete optimizer-step counts over expert DP, and updates those
+buffers only after a successful optimizer step. The 1B C4 configs use base rate
+`1e-3`, second-moment beta `0.9`, and `epsilon=1e-8`; the momentum config adds
+momentum beta `0.6`. Each launcher branch has an isolated auto-resume directory.

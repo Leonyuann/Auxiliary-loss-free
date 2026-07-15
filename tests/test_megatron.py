@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import torch
 
 from alf.config import AlfConfig, ExperimentConfig, MegatronConfig, ModelConfig, load_experiment_config
+from alf.metrics import collect_router_metrics, summarize_auxiliary_loss_free_router
 from alf.megatron_router import (
     MegatronAuxiliaryLossFreeTopKRouter,
     MegatronCoreAuxiliaryLossFreeTopKRouter,
@@ -45,6 +47,8 @@ def test_c4_1b_megatron_configs_use_ep4_dp2_top3_defaults() -> None:
     for path in [
         "experiments/qwen3_moe_c4_1b_megatron_alf.py",
         "experiments/qwen3_moe_c4_1b_megatron_alf_ema.py",
+        "experiments/qwen3_moe_c4_1b_megatron_alf_adaptive_per_expert.py",
+        "experiments/qwen3_moe_c4_1b_megatron_alf_adaptive_per_expert_momentum.py",
         "experiments/qwen3_moe_c4_1b_megatron_aux_loss.py",
     ]:
         config = load_experiment_config(path)
@@ -67,6 +71,35 @@ def test_c4_1b_megatron_configs_use_ep4_dp2_top3_defaults() -> None:
         validate_megatron_config(config)
 
 
+def test_megatron_adaptive_per_expert_configs_match_1b_baseline() -> None:
+    """Adaptive 1B configs should change only controller metadata and output paths."""
+
+    baseline = load_experiment_config("experiments/qwen3_moe_c4_1b_megatron_alf.py")
+    paths = {
+        "experiments/qwen3_moe_c4_1b_megatron_alf_adaptive_per_expert.py": (
+            "adaptive_per_expert",
+            0.9,
+        ),
+        "experiments/qwen3_moe_c4_1b_megatron_alf_adaptive_per_expert_momentum.py": (
+            "adaptive_per_expert_momentum",
+            0.6,
+        ),
+    }
+    for path, (policy, momentum_beta) in paths.items():
+        config = load_experiment_config(path)
+        assert config.alf.bias_update_policy == policy
+        assert config.alf.bias_update_rate == 1e-3
+        assert config.alf.bias_adaptive_per_expert_beta == 0.9
+        assert config.alf.bias_adaptive_per_expert_momentum_beta == momentum_beta
+        assert config.alf.bias_adaptive_per_expert_epsilon == 1e-8
+        assert config.model == baseline.model
+        assert config.data == baseline.data
+        assert config.eval == baseline.eval
+        assert config.megatron == baseline.megatron
+        assert replace(config.training, output_dir=baseline.training.output_dir) == baseline.training
+
+
+
 def test_megatron_launch_uses_distinct_auto_resume_directories() -> None:
     """Launch branches should use isolated output dirs and implicit latest resume."""
 
@@ -77,10 +110,28 @@ def test_megatron_launch_uses_distinct_auto_resume_directories() -> None:
     assert 'output_root="${OUTPUT_ROOT:-${OUTPUT_DIR:-$project_root/outputs}}"' in script
     assert 'alf_output_dir="$output_root/qwen3_moe_c4_1b_megatron_alf"' in script
     assert 'ema_output_dir="$output_root/qwen3_moe_c4_1b_megatron_alf_ema"' in script
+    assert (
+        'adaptive_per_expert_output_dir="$output_root/qwen3_moe_c4_1b_megatron_alf_adaptive_per_expert"'
+        in script
+    )
+    assert (
+        'adaptive_per_expert_momentum_output_dir="$output_root/qwen3_moe_c4_1b_megatron_alf_adaptive_per_expert_momentum"'
+        in script
+    )
     assert 'aux_output_dir="$output_root/qwen3_moe_c4_1b_megatron_aux_loss"' in script
     assert '--training.output_dir "$alf_output_dir"' in script
     assert '--training.output_dir "$ema_output_dir"' in script
+    assert '--training.output_dir "$adaptive_per_expert_output_dir"' in script
+    assert '--training.output_dir "$adaptive_per_expert_momentum_output_dir"' in script
     assert '--training.output_dir "$aux_output_dir"' in script
+    assert "RUN_ADAPTIVE_PER_EXPERT" in script
+    assert "RUN_ADAPTIVE_PER_EXPERT_MOMENTUM" in script
+    assert "ALF_ADAPTIVE_PER_EXPERT_BASE_RATE" in script
+    assert "ALF_ADAPTIVE_PER_EXPERT_BETA" in script
+    assert "ALF_ADAPTIVE_PER_EXPERT_MOMENTUM_BETA" in script
+    assert "ALF_ADAPTIVE_PER_EXPERT_EPSILON" in script
+    assert "qwen3_moe_c4_1b_megatron_alf_adaptive_per_expert.py" in script
+    assert "qwen3_moe_c4_1b_megatron_alf_adaptive_per_expert_momentum.py" in script
     assert "--training.resume_from" not in script
 
 
@@ -454,6 +505,86 @@ def test_megatron_core_alf_router_uses_accumulated_ema_update() -> None:
     expected_ema = torch.tensor([-1 / 24, -1 / 24, 1 / 8, -1 / 24], device=router.load_error_ema.device)
     assert torch.allclose(router.load_error_ema, expected_ema)
     assert torch.allclose(router.last_bias_delta, router.load_error_ema)
+
+
+def test_megatron_core_adaptive_per_expert_updates_and_checkpoints_fp32_state() -> None:
+    """Megatron adaptive policies should apply exact FP32 first/second-moment updates."""
+
+    from megatron.core.transformer.transformer_config import TransformerConfig
+
+    load = torch.tensor([0, 1, 1, 2])
+    load_error = torch.tensor([0.25, 0.0, 0.0, -0.25])
+    expected_second_moment = 0.5 * load_error.square()
+    expected_rate = 0.1 / torch.sqrt(expected_second_moment + 0.25)
+    for policy in ("adaptive_per_expert", "adaptive_per_expert_momentum"):
+        config = ExperimentConfig(
+            name=f"tiny-megatron-{policy}",
+            model=ModelConfig(
+                hidden_size=2,
+                intermediate_size=4,
+                num_hidden_layers=1,
+                num_attention_heads=1,
+                num_key_value_heads=1,
+                num_experts=4,
+                num_experts_per_tok=3,
+            ),
+            megatron=MegatronConfig(
+                enabled=True,
+                expert_model_parallel_size=4,
+                data_parallel_size=2,
+                transformer_impl="local",
+                moe_grouped_gemm=False,
+                overlap_grad_reduce=False,
+                overlap_param_gather=False,
+            ),
+            alf=AlfConfig(
+                enabled=True,
+                bias_update_rate=0.1,
+                bias_update_policy=policy,
+                bias_adaptive_per_expert_beta=0.5,
+                bias_adaptive_per_expert_momentum_beta=0.5,
+                bias_adaptive_per_expert_epsilon=0.25,
+            ),
+        )
+        kwargs = megatron_transformer_config_kwargs(config)
+        kwargs["perform_initialization"] = False
+        transformer_config = TransformerConfig(**kwargs)
+        process_groups = SimpleNamespace(tp=None, cp=None, tp_cp=None, tp_dp_cp=None)
+        router = MegatronCoreAuxiliaryLossFreeTopKRouter(
+            config=transformer_config,
+            pg_collection=process_groups,
+            alf_config=config.alf,
+        ).to(dtype=torch.bfloat16)
+
+        assert router.update_expert_bias_from_reduced_load(load) is True
+
+        expected_direction = 0.5 * load_error if policy.endswith("momentum") else load_error
+        assert router.load_error_second_moment.dtype == torch.float32
+        assert router.last_effective_update_rate.dtype == torch.float32
+        assert torch.allclose(router.load_error_second_moment, expected_second_moment)
+        assert torch.allclose(router.last_effective_update_rate, expected_rate)
+        assert torch.allclose(router.last_bias_delta, expected_rate * expected_direction)
+        summary = summarize_auxiliary_loss_free_router(router)
+        assert summary["bias_update_policy"] == policy
+        assert summary["load_error_second_moment"]["values"]
+        assert summary["effective_update_rate"]["values"]
+        collected = collect_router_metrics(router)
+        assert collected["routers"][""]["bias_update_policy"] == policy
+        if policy.endswith("momentum"):
+            assert router.load_error_momentum.dtype == torch.float32
+            assert torch.allclose(router.load_error_momentum, expected_direction)
+            assert summary["load_error_momentum"]["values"]
+
+        restored = MegatronCoreAuxiliaryLossFreeTopKRouter(
+            config=transformer_config,
+            pg_collection=process_groups,
+            alf_config=config.alf,
+        ).to(dtype=torch.bfloat16)
+        restored.load_state_dict(router.state_dict())
+        assert torch.equal(restored.load_error_second_moment, router.load_error_second_moment)
+        if policy.endswith("momentum"):
+            assert torch.equal(restored.load_error_momentum, router.load_error_momentum)
+
 
 
 def test_megatron_core_alf_router_honors_max_update_step() -> None:

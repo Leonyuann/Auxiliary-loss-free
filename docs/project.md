@@ -222,12 +222,14 @@ approximately 1B-parameter Qwen-style MoE. The default topology is TP=1, PP=1,
 CP=1, EP=4, and DP=2. The model uses 24 routed experts and top-3 routing, which
 places 6 experts on each expert-parallel rank.
 
-The project now has typed `MegatronConfig` fields, 1B ALF/ALF-EMA/aux-loss
-experiment configs, a scripted 8-GPU launch with batch, data, W&B, and LR schedule
+The project now has typed `MegatronConfig` fields, 1B ALF, ALF-EMA, adaptive
+per-expert, adaptive per-expert momentum, and auxiliary-loss experiment configs, a scripted 8-GPU launch with batch, data, W&B, and LR schedule
 overrides, and a Megatron-compatible ALF router that returns dense probability
 and routing-map tensors. ALF load counts accumulate locally across the optimizer
 step and are reduced once over the expert-data-parallel group before bias update,
 so expert-parallel shards are not double-counted when EP=4 and DP=2.
+Adaptive per-expert variants update checkpointed FP32 first/second-moment state from
+those reduced counts only after successful optimizer steps.
 
 `alf-megatron-train` now validates the topology, binds `LOCAL_RANK` before NCCL
 initialization, initializes Megatron Core model-parallel groups and CUDA RNG streams,
@@ -245,7 +247,7 @@ still needs to run before treating the path as production-ready.
 Megatron checkpoints are assembled under `.latest.incomplete` and published to
 `latest` only after all configured world-size shards exist. Resume rejects incomplete,
 world-size-mismatched, or TP/PP/CP/EP/DP-mismatched checkpoints and restores the
-local model/ALF-EMA buffers, optimizer, scheduler, successful step, attempt counter,
+local model/ALF controller buffers, optimizer, scheduler, successful step, attempt counter,
 and Python/NumPy/Torch plus Megatron model-parallel CUDA RNG state. Checkpoint
 publication uses an isolated staging directory and retains the prior complete latest.
 The saved attempt count restores a deterministic dataloader epoch/batch cursor. When

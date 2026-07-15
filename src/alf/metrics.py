@@ -253,7 +253,9 @@ def collect_bias_update_steps(model: nn.Module) -> dict[str, int]:
 
     update_steps: dict[str, int] = {}
     for module_name, module in model.named_modules():
-        if isinstance(module, Qwen3MoeAuxiliaryLossFreeTopKRouter):
+        if isinstance(module, Qwen3MoeAuxiliaryLossFreeTopKRouter) or hasattr(
+            module, "expert_bias_update_policy"
+        ):
             update_steps[module_name] = int(module.bias_update_steps.item())
     return update_steps
 
@@ -279,7 +281,10 @@ def collect_bias_update_deltas(
     bias_deltas: dict[str, Tensor] = {}
     update_events = 0
     for module_name, module in model.named_modules():
-        if not isinstance(module, Qwen3MoeAuxiliaryLossFreeTopKRouter):
+        if not (
+            isinstance(module, Qwen3MoeAuxiliaryLossFreeTopKRouter)
+            or hasattr(module, "expert_bias_update_policy")
+        ):
             continue
         current_steps = int(module.bias_update_steps.item())
         previous_steps = previous_update_steps.get(module_name, current_steps)
@@ -501,7 +506,7 @@ def summarize_expert_bias(expert_bias: Tensor) -> dict[str, Any]:
 
 
 def summarize_auxiliary_loss_free_router(
-    router: Qwen3MoeAuxiliaryLossFreeTopKRouter,
+    router: Any,
 ) -> dict[str, Any]:
     """Summarize the latest load and bias state for a router instance.
 
@@ -512,9 +517,16 @@ def summarize_auxiliary_loss_free_router(
         A serializable dictionary of router-specific metrics.
     """
 
+    num_experts = getattr(router, "num_experts", None)
+    if num_experts is None:
+        num_experts = getattr(getattr(router, "config", None), "num_moe_experts")
+    top_k = getattr(router, "top_k", None)
+    if top_k is None:
+        top_k = getattr(router, "topk")
+
     return {
-        "num_experts": int(router.num_experts),
-        "top_k": int(router.top_k),
+        "num_experts": int(num_experts),
+        "top_k": int(top_k),
         "bias_update_policy": router.expert_bias_update_policy,
         "bias_ema_beta": float(getattr(router, "expert_bias_ema_beta", 0.9)),
         "adaptive_beta_min": float(getattr(router, "expert_bias_adaptive_beta_min", 0.1)),
@@ -564,13 +576,13 @@ def summarize_auxiliary_loss_free_router(
         "load": summarize_expert_load(counts=router.last_expert_load),
         "bias": summarize_expert_bias(router.expert_bias),
         "load_error_second_moment": summarize_expert_bias(
-            getattr(router, "load_error_second_moment", torch.zeros(router.num_experts))
+            getattr(router, "load_error_second_moment", torch.zeros(num_experts))
         ),
         "load_error_momentum": summarize_expert_bias(
-            getattr(router, "load_error_momentum", torch.zeros(router.num_experts))
+            getattr(router, "load_error_momentum", torch.zeros(num_experts))
         ),
         "effective_update_rate": summarize_expert_bias(
-            getattr(router, "last_effective_update_rate", torch.zeros(router.num_experts))
+            getattr(router, "last_effective_update_rate", torch.zeros(num_experts))
         ),
         "last_bias_delta": [float(value) for value in router.last_bias_delta.detach().cpu().tolist()],
         "load_error_ema": [float(value) for value in router.load_error_ema.detach().cpu().tolist()],
@@ -595,7 +607,10 @@ def collect_auxiliary_loss_free_router_metrics(model: nn.Module) -> dict[str, An
     aggregate_bias: list[Tensor] = []
 
     for module_name, module in model.named_modules():
-        if not isinstance(module, Qwen3MoeAuxiliaryLossFreeTopKRouter):
+        if not (
+            isinstance(module, Qwen3MoeAuxiliaryLossFreeTopKRouter)
+            or hasattr(module, "expert_bias_update_policy")
+        ):
             continue
         router_summaries[module_name] = summarize_auxiliary_loss_free_router(module)
         aggregate_counts.append(module.last_expert_load.detach().cpu())
@@ -671,7 +686,9 @@ def collect_router_metrics(model: nn.Module) -> dict[str, Any]:
     aggregate_bias: list[Tensor] = []
 
     for module_name, module in model.named_modules():
-        if isinstance(module, Qwen3MoeAuxiliaryLossFreeTopKRouter):
+        if isinstance(module, Qwen3MoeAuxiliaryLossFreeTopKRouter) or hasattr(
+            module, "expert_bias_update_policy"
+        ):
             router_summaries[module_name] = summarize_auxiliary_loss_free_router(module)
             aggregate_counts.append(module.last_expert_load.detach().cpu())
             aggregate_bias.append(module.expert_bias.detach().cpu())

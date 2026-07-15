@@ -459,3 +459,27 @@ Verification:
 - `env PYTHONPATH=src uv run python -m compileall -q src tests experiments` passed.
 - `bash -n scripts/run_owt_104m_baselines.sh scripts/run_c4_300m_baselines.sh` passed.
 - `git diff --check` passed.
+
+## 2026-07-15 - Add 1B Megatron adaptive per-expert experiments
+- Added Megatron Core implementations of `adaptive_per_expert` and
+  `adaptive_per_expert_momentum` with current-step second-moment updates and an
+  optional first-moment load-error direction.
+- Stored policy-specific first moments, second moments, and effective update rates
+  as FP32 buffers so Megatron BF16 conversion and checkpoint restore preserve the
+  controller state.
+- Reused complete optimizer-step expert loads reduced over expert data parallelism,
+  and kept controller updates behind successful optimizer steps.
+- Added two matched 1B C4 Megatron experiment configs using EP=4, DP=2, 24 experts,
+  and top-3 routing, plus isolated opt-in branches in the 8xA100 launcher.
+- Added shared PyTorch/Megatron router metric collection and formula, checkpoint,
+  topology, configuration, and launcher regressions.
+- Preserved the existing tuned 104M OWT and 300M C4 experiment/script changes and
+  synchronized their defaults across direct configs and launcher overrides.
+- Updated PROJECT.md, README, and project, router, and metrics documentation.
+
+Verification:
+- `env PYTHONPATH=src uv run pytest -q` passed with 122 tests and 27 dependency/environment warnings.
+- `env PYTHONPATH=src uv run python -m compileall -q src experiments tests` passed.
+- `bash -n scripts/run_c4_1b_megatron_8xa100.sh scripts/run_c4_300m_baselines.sh scripts/run_owt_104m_baselines.sh` passed.
+- `git diff --check` passed.
+- The full 8xA100 training acceptance run remains pending on the target GPU host.

@@ -244,14 +244,41 @@ Deliverables:
   second moments.
 - Expose momentum configuration and state through typed configs, router metrics,
   JSONL, W&B, and checkpoint inspection.
-- Add matched OWT and C4 experiment configs plus opt-in launcher branches.
-- Audit the original policy formula and align its OWT training settings with the
-  same-scale sign baseline.
+- Add tuned OWT and C4 experiment configs plus opt-in launcher branches.
+- Audit the original policy formula and record the intended scale-specific training
+  and controller defaults.
 
 Acceptance criteria:
 
 - Exact two-step tests verify first-moment and second-moment update ordering.
-- Both experiment configs differ from their scale baselines only in controller
-  settings and output directory.
+- Configuration tests preserve the intended scale-specific controller and training
+  defaults.
 - Tiny training, checkpoint restore, full pytest, compilation, and launcher syntax
   checks pass.
+
+## Sprint 10: Megatron Adaptive Per-Expert Controllers
+
+Status: complete.
+
+Passes: true.
+
+Goal: extend the per-expert second-moment and momentum controllers to the
+approximately 1B-parameter Megatron Core experiment family.
+
+Deliverables:
+
+- Implement both adaptive per-expert policies in the Megatron Core router using
+  complete expert-DP-reduced optimizer-step loads.
+- Preserve policy-specific FP32 first/second-moment and effective-rate buffers in
+  Megatron checkpoints and expose them through shared router metrics.
+- Add matched 1B C4 experiment configs and isolated opt-in launcher branches for
+  both policies.
+- Preserve and document the tuned 104M OWT and 300M C4 controller defaults already
+  used by their experiment launchers.
+
+Acceptance criteria:
+
+- Exact Megatron Core formula tests cover both policies and BF16 checkpoint restore.
+- The 1B configs preserve the sign baseline model, data, training, evaluation,
+  and parallel topology outside controller metadata and output paths.
+- Full pytest, compilation, launcher syntax, and diff checks pass.
